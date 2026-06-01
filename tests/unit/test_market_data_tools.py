@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import TypedDict, cast
+
+import pytest
+
+from tests.fakes.fake_mt5 import FakeMT5Backend
+from yugen_mt5_mcp.audit import AuditStore
+from yugen_mt5_mcp.config import AppConfig, RiskConfig
+from yugen_mt5_mcp.market_data import MarketDataError, MarketDataService
+from yugen_mt5_mcp.mt5_adapter import MT5Adapter
+from yugen_mt5_mcp.server import create_server
+
+
+class CandleRequest(TypedDict):
+    symbol: str
+    timeframe: str
+    limit: int
+
+
+def build_service(
+    tmp_path: Path,
+    *,
+    allowed_symbols: tuple[str, ...] = ("EURUSD",),
+) -> MarketDataService:
+    config = AppConfig(risk=RiskConfig(allowed_symbols=allowed_symbols))
+    backend = FakeMT5Backend()
+    adapter = MT5Adapter(backend=backend)
+    audit_store = AuditStore(tmp_path)
+    return MarketDataService(config=config, adapter=adapter, audit_store=audit_store)
+
+
+def test_get_candles_returns_normalized_bars(tmp_path: Path) -> None:
+    service = build_service(tmp_path / "audit.sqlite3")
+
+    candles = service.get_candles(symbol="EURUSD", timeframe="M1", limit=2)
+
+    assert [candle.close for candle in candles] == [1.105, 1.109]
+    assert candles[0].spread == 12
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"symbol": "GBPUSD", "timeframe": "M1", "limit": 2}, "not allowed"),
+        ({"symbol": "EURUSD", "timeframe": "BAD", "limit": 2}, "unsupported timeframe"),
+        ({"symbol": "EURUSD", "timeframe": "M1", "limit": 0}, "between 1 and 1000"),
+    ],
+)
+def test_get_candles_rejects_invalid_requests_and_audits(
+    tmp_path: Path,
+    kwargs: CandleRequest,
+    message: str,
+) -> None:
+    audit_path = tmp_path / "audit.sqlite3"
+    service = build_service(audit_path)
+
+    with pytest.raises(MarketDataError, match=message):
+        service.get_candles(**kwargs)
+
+    rows = AuditStore(audit_path).fetch_all()
+    assert rows[-1]["event_type"] == "market_data.get_candles"
+    assert rows[-1]["decision"] == "rejected"
+
+
+def test_list_positions_includes_account_mode(tmp_path: Path) -> None:
+    service = build_service(tmp_path / "audit.sqlite3")
+
+    positions = service.list_positions()
+
+    assert len(positions) == 1
+    assert positions[0].account_mode == "hedging"
+
+
+def test_server_registers_read_tools_and_calls_candles(tmp_path: Path) -> None:
+    service = build_service(tmp_path / "audit.sqlite3")
+    mcp = create_server(service)
+
+    async def run_tool() -> tuple[list[str], object]:
+        from fastmcp.client import Client
+
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+            result = await client.call_tool(
+                "get_candles",
+                {"symbol": "EURUSD", "timeframe": "M1", "limit": 2},
+            )
+            return [tool.name for tool in tools], result.data
+
+    tool_names, payload = asyncio.run(run_tool())
+    candles = cast(list[dict[str, object]], payload)
+
+    assert "get_candles" in tool_names
+    assert len(candles) == 2
+    assert candles[0]["symbol"] == "EURUSD"
+
+
+def test_get_history_returns_orders_and_deals(tmp_path: Path) -> None:
+    service = build_service(tmp_path / "audit.sqlite3")
+
+    history = service.get_history(
+        start=datetime(2024, 1, 1, 11, 0, tzinfo=UTC),
+        end=datetime(2024, 1, 1, 13, 0, tzinfo=UTC),
+        symbol="EURUSD",
+    )
+
+    assert len(history.deals) == 1
+    assert len(history.orders) == 1
+    assert history.window.end - history.window.start == timedelta(hours=2)

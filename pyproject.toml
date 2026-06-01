@@ -12,7 +12,9 @@ license = { file = "LICENSE.md" }
 authors = [
   { name = "Yugen" },
 ]
-dependencies = []
+dependencies = [
+  "fastmcp>=2.10,<4.0",
+]
 
 [project.optional-dependencies]
 dev = [

@@ -1,0 +1,389 @@
+"""Typed MT5 adapter with serialized backend access."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from threading import Lock
+from typing import Any, Protocol, TypeVar, cast
+
+TResult = TypeVar("TResult")
+
+
+class MT5AdapterError(RuntimeError):
+    """Raised when the MT5 backend cannot satisfy a read request."""
+
+
+class AccountMode(StrEnum):
+    NETTING = "netting"
+    HEDGING = "hedging"
+
+
+class Timeframe(StrEnum):
+    M1 = "M1"
+    M5 = "M5"
+    H1 = "H1"
+
+
+@dataclass(slots=True, frozen=True)
+class SymbolInfo:
+    symbol: str
+    path: str
+    visible: bool
+
+
+@dataclass(slots=True, frozen=True)
+class Tick:
+    symbol: str
+    bid: float
+    ask: float
+    last: float
+    volume: int
+    observed_at: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class Candle:
+    symbol: str
+    timeframe: Timeframe
+    open: float
+    high: float
+    low: float
+    close: float
+    tick_volume: int
+    spread: int
+    real_volume: int
+    observed_at: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class AccountSnapshot:
+    login: int
+    server: str
+    balance: float
+    equity: float
+    margin_free: float
+    leverage: int
+    currency: str
+    company: str
+    account_mode: AccountMode
+
+
+@dataclass(slots=True, frozen=True)
+class PositionSnapshot:
+    ticket: int
+    symbol: str
+    volume: float
+    order_type: int
+    price_open: float
+    profit: float
+    account_mode: AccountMode
+
+
+@dataclass(slots=True, frozen=True)
+class OrderSnapshot:
+    ticket: int
+    symbol: str
+    volume_initial: float
+    price_open: float
+    state: int
+    order_type: int
+
+
+@dataclass(slots=True, frozen=True)
+class DealSnapshot:
+    ticket: int
+    order: int
+    symbol: str
+    volume: float
+    price: float
+    profit: float
+    deal_type: int
+    entry: int
+    observed_at: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class HistoryOrderSnapshot:
+    ticket: int
+    symbol: str
+    volume_initial: float
+    price_open: float
+    state: int
+    order_type: int
+    observed_at: datetime
+
+
+class MetaTrader5API(Protocol):
+    TIMEFRAME_M1: int
+    TIMEFRAME_M5: int
+    TIMEFRAME_H1: int
+    ACCOUNT_MARGIN_MODE_RETAIL_NETTING: int
+    ACCOUNT_MARGIN_MODE_EXCHANGE: int
+    ACCOUNT_MARGIN_MODE_RETAIL_HEDGING: int
+
+    def symbols_get(self) -> Sequence[object] | None: ...
+    def symbol_select(self, symbol: str, enable: bool) -> bool: ...
+    def symbol_info_tick(self, symbol: str) -> object | None: ...
+    def copy_rates_from_pos(
+        self, symbol: str, timeframe: int, start_pos: int, count: int
+    ) -> Sequence[object] | None: ...
+    def account_info(self) -> object | None: ...
+    def positions_get(self, *, symbol: str | None = None) -> Sequence[object] | None: ...
+    def orders_get(self, *, symbol: str | None = None) -> Sequence[object] | None: ...
+    def history_deals_get(
+        self, date_from: datetime, date_to: datetime, *, group: str | None = None
+    ) -> Sequence[object] | None: ...
+    def history_orders_get(
+        self, date_from: datetime, date_to: datetime, *, group: str | None = None
+    ) -> Sequence[object] | None: ...
+    def last_error(self) -> tuple[int, str]: ...
+
+
+def _get_attr(payload: object, key: str) -> Any:
+    if isinstance(payload, Mapping):
+        return payload[key]
+    return getattr(payload, key)
+
+
+def _as_float(payload: object, key: str) -> float:
+    value = _get_attr(payload, key)
+    return float(value)
+
+
+def _as_datetime(timestamp: object) -> datetime:
+    return datetime.fromtimestamp(int(cast(int | float | str, timestamp)), tz=UTC)
+
+
+def load_default_backend() -> MetaTrader5API:
+    try:
+        import MetaTrader5 as backend  # type: ignore[import-not-found]
+    except ImportError as error:  # pragma: no cover - exercised only with real MT5 installs
+        raise MT5AdapterError("MetaTrader5 package is not installed") from error
+    return cast(MetaTrader5API, backend)
+
+
+class MT5Adapter:
+    def __init__(self, backend: MetaTrader5API | None = None) -> None:
+        self._backend = backend or load_default_backend()
+        self._lock = Lock()
+
+    def list_symbols(self) -> list[SymbolInfo]:
+        rows = self._call("symbols_get", self._backend.symbols_get)
+        return [
+            SymbolInfo(
+                symbol=str(_get_attr(row, "name")),
+                path=str(_get_attr(row, "path")),
+                visible=bool(_get_attr(row, "visible")),
+            )
+            for row in rows
+        ]
+
+    def get_tick(self, symbol: str) -> Tick:
+        self._ensure_symbol_selected(symbol)
+        row = self._call_single(
+            "symbol_info_tick",
+            lambda: self._backend.symbol_info_tick(symbol),
+            empty_message=f"tick not available for symbol: {symbol}",
+        )
+        return Tick(
+            symbol=symbol,
+            bid=_as_float(row, "bid"),
+            ask=_as_float(row, "ask"),
+            last=_as_float(row, "last"),
+            volume=int(_get_attr(row, "volume")),
+            observed_at=_as_datetime(_get_attr(row, "time")),
+        )
+
+    def get_candles(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Candle]:
+        self._ensure_symbol_selected(symbol)
+        timeframe_code = self._timeframe_code(timeframe)
+        rows = self._call_rows(
+            "copy_rates_from_pos",
+            lambda: self._backend.copy_rates_from_pos(symbol, timeframe_code, 0, limit),
+            empty_message=f"candles not available for symbol/timeframe: {symbol}/{timeframe.value}",
+        )
+        return [
+            Candle(
+                symbol=symbol,
+                timeframe=timeframe,
+                open=_as_float(row, "open"),
+                high=_as_float(row, "high"),
+                low=_as_float(row, "low"),
+                close=_as_float(row, "close"),
+                tick_volume=int(_get_attr(row, "tick_volume")),
+                spread=int(_get_attr(row, "spread")),
+                real_volume=int(_get_attr(row, "real_volume")),
+                observed_at=_as_datetime(_get_attr(row, "time")),
+            )
+            for row in rows
+        ]
+
+    def get_account(self) -> AccountSnapshot:
+        row = self._call_single(
+            "account_info",
+            self._backend.account_info,
+            empty_message="account info unavailable",
+        )
+        return AccountSnapshot(
+            login=int(_get_attr(row, "login")),
+            server=str(_get_attr(row, "server")),
+            balance=_as_float(row, "balance"),
+            equity=_as_float(row, "equity"),
+            margin_free=_as_float(row, "margin_free"),
+            leverage=int(_get_attr(row, "leverage")),
+            currency=str(_get_attr(row, "currency")),
+            company=str(_get_attr(row, "company")),
+            account_mode=self._account_mode(int(_get_attr(row, "margin_mode"))),
+        )
+
+    def list_positions(self, symbol: str | None = None) -> list[PositionSnapshot]:
+        account_mode = self.get_account().account_mode
+        rows = self._call(
+            "positions_get",
+            lambda: self._backend.positions_get(symbol=symbol),
+        )
+        return [
+            PositionSnapshot(
+                ticket=int(_get_attr(row, "ticket")),
+                symbol=str(_get_attr(row, "symbol")),
+                volume=_as_float(row, "volume"),
+                order_type=int(_get_attr(row, "type")),
+                price_open=_as_float(row, "price_open"),
+                profit=_as_float(row, "profit"),
+                account_mode=account_mode,
+            )
+            for row in rows
+        ]
+
+    def list_orders(self, symbol: str | None = None) -> list[OrderSnapshot]:
+        rows = self._call("orders_get", lambda: self._backend.orders_get(symbol=symbol))
+        return [
+            OrderSnapshot(
+                ticket=int(_get_attr(row, "ticket")),
+                symbol=str(_get_attr(row, "symbol")),
+                volume_initial=_as_float(row, "volume_initial"),
+                price_open=_as_float(row, "price_open"),
+                state=int(_get_attr(row, "state")),
+                order_type=int(_get_attr(row, "type")),
+            )
+            for row in rows
+        ]
+
+    def list_history_deals(
+        self, start: datetime, end: datetime, symbol: str | None = None
+    ) -> list[DealSnapshot]:
+        rows = self._call(
+            "history_deals_get",
+            lambda: self._backend.history_deals_get(start, end, group=symbol),
+        )
+        return [
+            DealSnapshot(
+                ticket=int(_get_attr(row, "ticket")),
+                order=int(_get_attr(row, "order")),
+                symbol=str(_get_attr(row, "symbol")),
+                volume=_as_float(row, "volume"),
+                price=_as_float(row, "price"),
+                profit=_as_float(row, "profit"),
+                deal_type=int(_get_attr(row, "type")),
+                entry=int(_get_attr(row, "entry")),
+                observed_at=_as_datetime(_get_attr(row, "time")),
+            )
+            for row in rows
+        ]
+
+    def list_history_orders(
+        self, start: datetime, end: datetime, symbol: str | None = None
+    ) -> list[HistoryOrderSnapshot]:
+        rows = self._call(
+            "history_orders_get",
+            lambda: self._backend.history_orders_get(start, end, group=symbol),
+        )
+        return [
+            HistoryOrderSnapshot(
+                ticket=int(_get_attr(row, "ticket")),
+                symbol=str(_get_attr(row, "symbol")),
+                volume_initial=_as_float(row, "volume_initial"),
+                price_open=_as_float(row, "price_open"),
+                state=int(_get_attr(row, "state")),
+                order_type=int(_get_attr(row, "type")),
+                observed_at=_as_datetime(_get_attr(row, "time_setup")),
+            )
+            for row in rows
+        ]
+
+    def _timeframe_code(self, timeframe: Timeframe) -> int:
+        mapping = {
+            Timeframe.M1: self._backend.TIMEFRAME_M1,
+            Timeframe.M5: self._backend.TIMEFRAME_M5,
+            Timeframe.H1: self._backend.TIMEFRAME_H1,
+        }
+        return mapping[timeframe]
+
+    def _account_mode(self, margin_mode: int) -> AccountMode:
+        if margin_mode == self._backend.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING:
+            return AccountMode.HEDGING
+        if margin_mode in {
+            self._backend.ACCOUNT_MARGIN_MODE_RETAIL_NETTING,
+            self._backend.ACCOUNT_MARGIN_MODE_EXCHANGE,
+        }:
+            return AccountMode.NETTING
+        raise MT5AdapterError(f"unsupported MT5 account margin mode: {margin_mode}")
+
+    def _ensure_symbol_selected(self, symbol: str) -> None:
+        if self._call_boolean(
+            "symbol_select",
+            lambda: self._backend.symbol_select(symbol, True),
+        ):
+            return
+        raise self._backend_error(f"symbol selection failed for: {symbol}")
+
+    def _call(
+        self,
+        operation: str,
+        callback: Callable[[], Sequence[object] | None],
+    ) -> list[object]:
+        with self._lock:
+            result = callback()
+        if result is None:
+            raise self._backend_error(f"MT5 returned no result for {operation}")
+        return list(result)
+
+    def _call_rows(
+        self,
+        operation: str,
+        callback: Callable[[], Sequence[object] | None],
+        *,
+        empty_message: str,
+    ) -> list[object]:
+        rows = self._call_single(operation, callback, empty_message=empty_message)
+        return list(rows)
+
+    def _call_single(
+        self,
+        operation: str,
+        callback: Callable[[], TResult | None],
+        *,
+        empty_message: str,
+    ) -> TResult:
+        with self._lock:
+            result = callback()
+        if result is None:
+            raise self._backend_error(empty_message, operation=operation)
+        return result
+
+    def _call_boolean(self, operation: str, callback: Callable[[], bool]) -> bool:
+        with self._lock:
+            result = callback()
+        if result is False:
+            return False
+        if result is True:
+            return True
+        raise self._backend_error(f"MT5 returned non-boolean result for {operation}")
+
+    def _backend_error(self, message: str, *, operation: str | None = None) -> MT5AdapterError:
+        code, detail = self._backend.last_error()
+        prefix = f"{operation}: " if operation else ""
+        return MT5AdapterError(f"{prefix}{message} (last_error={code}: {detail})")

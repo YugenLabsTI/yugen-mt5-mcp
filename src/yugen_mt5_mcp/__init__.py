@@ -1,6 +1,21 @@
 """yugen_mt5_mcp package."""
 
 from .audit import AuditEvent, AuditStore
+from .chart_bridge import (
+    SCHEMA_VERSION,
+    ChartBridgeAck,
+    ChartBridgeAction,
+    ChartBridgeClient,
+    ChartBridgeConfig,
+    ChartBridgeError,
+    ChartBridgeProtocolError,
+    ChartBridgeTimeoutError,
+    ChartDescriptor,
+    ChartObjectPoint,
+    ChartObjectSpec,
+    ChartSelector,
+    build_auth_tag,
+)
 from .config import AppConfig, ConfigError, TransportMode
 from .market_data import HistorySnapshot, HistoryWindow, MarketDataError, MarketDataService
 from .mt5_adapter import (
@@ -21,6 +36,18 @@ __all__ = [
     "AccountTradeMode",
     "AuditEvent",
     "AuditStore",
+    "build_auth_tag",
+    "ChartBridgeAck",
+    "ChartBridgeAction",
+    "ChartBridgeClient",
+    "ChartBridgeConfig",
+    "ChartBridgeError",
+    "ChartBridgeProtocolError",
+    "ChartBridgeTimeoutError",
+    "ChartDescriptor",
+    "ChartObjectPoint",
+    "ChartObjectSpec",
+    "ChartSelector",
     "ConfigError",
     "create_server",
     "ExecutedTrade",
@@ -34,6 +61,7 @@ __all__ = [
     "RiskPolicy",
     "RiskPolicyError",
     "SessionRiskStore",
+    "SCHEMA_VERSION",
     "Timeframe",
     "TradeAction",
     "TradeSide",

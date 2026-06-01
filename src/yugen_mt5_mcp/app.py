@@ -16,6 +16,7 @@ from .mt5_adapter import MT5Adapter
 from .server import create_server
 
 ALLOWED_SYMBOLS_ENV = "YUGEN_MT5_ALLOWED_SYMBOLS"
+AUDIT_PATH_ENV = "YUGEN_MT5_AUDIT_PATH"
 DEFAULT_AUDIT_PATH = Path("var/audit.sqlite3")
 
 
@@ -59,19 +60,27 @@ def parse_allowed_symbols(
     return symbols, ()
 
 
+def resolve_audit_path(env: Mapping[str, str]) -> Path:
+    raw_value = env.get(AUDIT_PATH_ENV, "").strip()
+    if not raw_value:
+        return DEFAULT_AUDIT_PATH
+    return Path(raw_value)
+
+
 def build_runtime(
     *,
     env: Mapping[str, str] | None = None,
-    audit_path: Path = DEFAULT_AUDIT_PATH,
+    audit_path: Path | None = None,
     adapter_factory: Callable[[], object] = MT5Adapter,
     server_factory: Callable[[AppConfig, object, Path], RunnableServer] | None = None,
 ) -> RuntimeApp:
     runtime_env = os.environ if env is None else env
+    resolved_audit_path = resolve_audit_path(runtime_env) if audit_path is None else audit_path
     allowed_symbols, warnings = parse_allowed_symbols(runtime_env)
     config = AppConfig(risk=RiskConfig(allowed_symbols=allowed_symbols))
     adapter = adapter_factory()
     factory = _create_default_server if server_factory is None else server_factory
-    server = factory(config, adapter, audit_path)
+    server = factory(config, adapter, resolved_audit_path)
     return RuntimeApp(server=server, warnings=warnings)
 
 

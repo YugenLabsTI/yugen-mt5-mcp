@@ -42,6 +42,14 @@ def test_get_candles_returns_normalized_bars(tmp_path: Path) -> None:
     assert candles[0].spread == 12
 
 
+def test_wildcard_allowed_symbols_permits_read_tools(tmp_path: Path) -> None:
+    service = build_service(tmp_path / "audit.sqlite3", allowed_symbols=("*",))
+
+    tick = service.get_tick(symbol="eurusd")
+
+    assert tick.symbol == "EURUSD"
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

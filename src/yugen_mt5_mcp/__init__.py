@@ -1,5 +1,13 @@
 """yugen_mt5_mcp package."""
 
+from .app import (
+    EntrypointWarning,
+    RuntimeApp,
+    build_runtime,
+    emit_warnings,
+    parse_allowed_symbols,
+    run_stdio,
+)
 from .audit import AuditEvent, AuditStore
 from .chart_bridge import (
     SCHEMA_VERSION,
@@ -42,6 +50,7 @@ __all__ = [
     "AccountTradeMode",
     "AuditEvent",
     "AuditStore",
+    "build_runtime",
     "build_auth_tag",
     "ChartBridgeAck",
     "ChartBridgeAction",
@@ -57,6 +66,8 @@ __all__ = [
     "ConfigError",
     "create_server",
     "DemoSmokeControls",
+    "EntrypointWarning",
+    "emit_warnings",
     "ExecutedTrade",
     "HistorySnapshot",
     "HistoryWindow",
@@ -67,11 +78,14 @@ __all__ = [
     "RiskAcknowledgement",
     "RiskPolicy",
     "RiskPolicyError",
+    "RuntimeApp",
     "RemoteRequestIdentity",
     "RemoteSecurityError",
     "RemoteSecurityManager",
     "SessionRiskStore",
     "SCHEMA_VERSION",
+    "parse_allowed_symbols",
+    "run_stdio",
     "Timeframe",
     "TradeAction",
     "TradeSide",

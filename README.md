@@ -1,13 +1,64 @@
 # yugen-mt5-mcp
 
-A secure, extensible MCP server for MetaTrader with trading, chart objects, risk controls, and VPS-ready deployment.
+Secure MCP server foundations for MetaTrader 5 with audited trading controls, loopback chart bridging, and a hardened remote path for VPS use.
 
-## Foundation status
+## Quick path
 
-PR1 bootstraps the Python package, safe transport configuration defaults, and the SQLite audit base.
+1. Start in local `stdio` mode by default.
+2. Enable remote mode only behind Caddy TLS termination with a bearer token, private/loopback bind, and explicit allowlist.
+3. Treat real-account trading as session-scoped risk acceptance that resets on restart.
 
-### Current guarantees
+## Transport modes
 
-- Local `stdio` is the default transport.
-- Remote transport is opt-in and rejected unless bearer auth, TLS termination, and a non-wildcard bind are configured.
-- Audit events are persisted to SQLite with recursive secret redaction for tokens, passwords, and authorization headers.
+| Mode | Default | Requirements | Notes |
+|------|---------|--------------|-------|
+| `stdio` | Yes | None | No TCP listener is opened. |
+| `remote` | No | `tls_terminated=true`, `reverse_proxy="caddy"`, bearer token, non-public bind, non-empty allowlist | Intended for VPS deployments with Caddy terminating TLS and proxying to the local MCP process. |
+
+Remote startup is rejected if it tries to:
+
+- skip bearer auth,
+- skip TLS termination,
+- bind to wildcard/public IPs,
+- allow every client (`0.0.0.0/0` or equivalent), or
+- bypass the documented Caddy reverse-proxy path.
+
+## VPS Caddy path
+
+Recommended topology:
+
+```text
+Agent -> HTTPS/WSS -> Caddy (TLS) -> 127.0.0.1:<mcp-port> -> yugen-mt5-mcp
+```
+
+Keep the MCP process on a loopback or private bind. Caddy is the public edge; the MCP server is not.
+
+## Trading safety model
+
+| Control | Behavior |
+|---------|----------|
+| Real-account acknowledgement | Required only for the current server/agent session. |
+| Restart semantics | Any server or agent restart clears the acknowledgement. |
+| Allowed symbols / account modes | Enforced before MT5 calls. |
+| Volume / exposure limits | Checked before order submission. |
+| Audit trail | SQLite append-only events with token/secret redaction. |
+
+## Demo smoke controls
+
+Live smoke coverage is opt-in and demo-only.
+
+Required environment variables:
+
+- `YUGEN_MT5_ENABLE_DEMO_SMOKE=1`
+- `YUGEN_MT5_DEMO_SMOKE_ACK=demo-only`
+
+Optional environment variables:
+
+- `YUGEN_MT5_DEMO_SMOKE_SYMBOLS=EURUSD,XAUUSD`
+- `YUGEN_MT5_DEMO_SMOKE_MAX_VOLUME=0.01`
+
+Guardrails:
+
+- real accounts are rejected,
+- symbols must be explicitly allowed,
+- smoke volume must stay `> 0` and `<= 0.01` lots.

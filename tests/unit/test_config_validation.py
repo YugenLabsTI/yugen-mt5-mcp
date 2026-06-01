@@ -45,6 +45,7 @@ def test_default_config_is_stdio_and_safe() -> None:
                         "enabled": True,
                         "host": "0.0.0.0",
                         "tls_terminated": True,
+                        "reverse_proxy": "caddy",
                         "bearer_token": "secret-token",
                     },
                 }
@@ -83,6 +84,7 @@ def test_remote_mode_accepts_explicit_safe_configuration() -> None:
                     "host": "127.0.0.1",
                     "port": 9443,
                     "tls_terminated": True,
+                    "reverse_proxy": "caddy",
                     "bearer_token": "secret-token",
                     "allowlist": ["127.0.0.1/32", "10.0.0.0/24"],
                 },

@@ -26,6 +26,12 @@ from .mt5_adapter import (
     Timeframe,
 )
 from .risk import RiskPolicy, RiskPolicyError, TradeAction
+from .security import (
+    DemoSmokeControls,
+    RemoteRequestIdentity,
+    RemoteSecurityError,
+    RemoteSecurityManager,
+)
 from .server import create_server
 from .session import RiskAcknowledgement, SessionRiskStore
 from .trading import ExecutedTrade, TradeSide, TradingError, TradingService
@@ -50,6 +56,7 @@ __all__ = [
     "ChartSelector",
     "ConfigError",
     "create_server",
+    "DemoSmokeControls",
     "ExecutedTrade",
     "HistorySnapshot",
     "HistoryWindow",
@@ -60,6 +67,9 @@ __all__ = [
     "RiskAcknowledgement",
     "RiskPolicy",
     "RiskPolicyError",
+    "RemoteRequestIdentity",
+    "RemoteSecurityError",
+    "RemoteSecurityManager",
     "SessionRiskStore",
     "SCHEMA_VERSION",
     "Timeframe",

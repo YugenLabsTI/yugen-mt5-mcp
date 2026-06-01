@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import time
@@ -47,40 +46,18 @@ class RemoteTransportConfig:
     port: int = 8765
     bearer_token: str | None = None
     tls_terminated: bool = False
+    reverse_proxy: str | None = None
     allowlist: tuple[str, ...] = ("127.0.0.1/32", "::1/128")
 
     def validate(self) -> None:
         if not self.enabled:
             return
-
-        if not self.bearer_token or not self.bearer_token.strip():
-            raise ConfigError("remote transport requires a bearer token")
-
-        if not self.tls_terminated:
-            raise ConfigError("remote transport requires TLS termination")
-
-        if not 1 <= self.port <= 65535:
-            raise ConfigError("remote transport port must be between 1 and 65535")
+        from .security import RemoteSecurityError, validate_remote_transport_config
 
         try:
-            bind_ip = ipaddress.ip_address(self.host)
-        except ValueError as error:
-            raise ConfigError("remote transport host must be a literal IP address") from error
-
-        if bind_ip.is_unspecified:
-            raise ConfigError("remote transport host must not use a wildcard bind")
-
-        if not self.allowlist:
-            raise ConfigError("remote transport requires a non-empty allowlist")
-
-        for entry in self.allowlist:
-            try:
-                network = ipaddress.ip_network(entry, strict=False)
-            except ValueError as error:
-                raise ConfigError(f"invalid allowlist entry: {entry}") from error
-
-            if network.prefixlen == 0:
-                raise ConfigError("remote transport allowlist must not allow all addresses")
+            validate_remote_transport_config(self)
+        except RemoteSecurityError as error:
+            raise ConfigError(str(error)) from error
 
 
 @dataclass(slots=True, frozen=True)
@@ -138,6 +115,7 @@ class AppConfig:
             port=int(remote_data.get("port", 8765)),
             bearer_token=remote_data.get("bearer_token"),
             tls_terminated=bool(remote_data.get("tls_terminated", False)),
+            reverse_proxy=remote_data.get("reverse_proxy"),
             allowlist=_as_tuple(remote_data.get("allowlist", ("127.0.0.1/32", "::1/128"))),
         )
         transport = TransportConfig(

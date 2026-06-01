@@ -339,10 +339,16 @@ class MT5Adapter:
     def list_history_deals(
         self, start: datetime, end: datetime, symbol: str | None = None
     ) -> list[DealSnapshot]:
-        rows = self._call(
-            "history_deals_get",
-            lambda: self._backend.history_deals_get(start, end, group=symbol),
-        )
+        if symbol is None:
+            rows = self._call(
+                "history_deals_get",
+                lambda: self._backend.history_deals_get(start, end),
+            )
+        else:
+            rows = self._call(
+                "history_deals_get",
+                lambda: self._backend.history_deals_get(start, end, group=symbol),
+            )
         return [
             DealSnapshot(
                 ticket=int(_get_attr(row, "ticket")),
@@ -361,10 +367,16 @@ class MT5Adapter:
     def list_history_orders(
         self, start: datetime, end: datetime, symbol: str | None = None
     ) -> list[HistoryOrderSnapshot]:
-        rows = self._call(
-            "history_orders_get",
-            lambda: self._backend.history_orders_get(start, end, group=symbol),
-        )
+        if symbol is None:
+            rows = self._call(
+                "history_orders_get",
+                lambda: self._backend.history_orders_get(start, end),
+            )
+        else:
+            rows = self._call(
+                "history_orders_get",
+                lambda: self._backend.history_orders_get(start, end, group=symbol),
+            )
         return [
             HistoryOrderSnapshot(
                 ticket=int(_get_attr(row, "ticket")),

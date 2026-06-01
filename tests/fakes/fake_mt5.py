@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 
 @dataclass(slots=True)
@@ -31,6 +33,7 @@ class FakeMT5Account:
     currency: str
     company: str
     margin_mode: int
+    trade_mode: int
 
 
 @dataclass(slots=True)
@@ -77,6 +80,16 @@ class FakeMT5HistoryOrder:
     time_setup: int
 
 
+@dataclass(slots=True)
+class FakeMT5TradeResult:
+    retcode: int
+    comment: str
+    order: int = 0
+    deal: int = 0
+    volume: float = 0.0
+    price: float = 0.0
+
+
 class FakeMT5Backend:
     TIMEFRAME_M1 = 1
     TIMEFRAME_M5 = 5
@@ -85,12 +98,37 @@ class FakeMT5Backend:
     ACCOUNT_MARGIN_MODE_RETAIL_NETTING = 0
     ACCOUNT_MARGIN_MODE_EXCHANGE = 1
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
+    ACCOUNT_TRADE_MODE_DEMO = 0
+    ACCOUNT_TRADE_MODE_CONTEST = 1
+    ACCOUNT_TRADE_MODE_REAL = 2
+    TRADE_ACTION_DEAL = 1
+    TRADE_ACTION_SLTP = 6
+    ORDER_TYPE_BUY = 0
+    ORDER_TYPE_SELL = 1
+    TRADE_RETCODE_DONE = 10009
+    TRADE_RETCODE_DONE_PARTIAL = 10010
+    TRADE_RETCODE_REJECT = 10013
 
     def __init__(self) -> None:
         now = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
         timestamp = int(now.timestamp())
         self.selected_symbols: list[str] = []
         self._last_error: tuple[int, str] = (0, "OK")
+        self.order_check_result = FakeMT5TradeResult(
+            retcode=self.TRADE_RETCODE_DONE,
+            comment="check ok",
+            volume=0.0,
+            price=0.0,
+        )
+        self.order_send_result = FakeMT5TradeResult(
+            retcode=self.TRADE_RETCODE_DONE,
+            comment="done",
+            order=9001,
+            deal=9101,
+            volume=0.0,
+            price=0.0,
+        )
+        self.order_requests: list[dict[str, object]] = []
         self.symbols = [
             FakeMT5Symbol(name="EURUSD"),
             FakeMT5Symbol(name="XAUUSD", path="Metals\\Spot"),
@@ -132,6 +170,7 @@ class FakeMT5Backend:
             currency="USD",
             company="Yugen Demo",
             margin_mode=self.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING,
+            trade_mode=self.ACCOUNT_TRADE_MODE_DEMO,
         )
         self.positions = [
             FakeMT5Position(
@@ -231,3 +270,77 @@ class FakeMT5Backend:
 
     def last_error(self) -> tuple[int, str]:
         return self._last_error
+
+    def order_check(self, request: Mapping[str, object]) -> FakeMT5TradeResult:
+        self.order_requests.append(dict(request))
+        result = self.order_check_result
+        volume = float(cast(float | int | str, request.get("volume", result.volume)))
+        price = float(cast(float | int | str, request.get("price", result.price)))
+        return FakeMT5TradeResult(
+            retcode=result.retcode,
+            comment=result.comment,
+            order=result.order,
+            deal=result.deal,
+            volume=volume,
+            price=price,
+        )
+
+    def order_send(self, request: Mapping[str, object]) -> FakeMT5TradeResult:
+        self.order_requests.append(dict(request))
+        action = int(cast(int | float | str, request["action"]))
+        volume = float(
+            cast(float | int | str, request.get("volume", self.order_send_result.volume))
+        )
+        price = float(
+            cast(float | int | str, request.get("price", self.order_send_result.price))
+        )
+        result = FakeMT5TradeResult(
+            retcode=self.order_send_result.retcode,
+            comment=self.order_send_result.comment,
+            order=self.order_send_result.order,
+            deal=self.order_send_result.deal,
+            volume=volume,
+            price=price,
+        )
+        if result.retcode not in {self.TRADE_RETCODE_DONE, self.TRADE_RETCODE_DONE_PARTIAL}:
+            return result
+
+        if action == self.TRADE_ACTION_DEAL:
+            self._apply_deal_request(request, volume)
+        return result
+
+    def _apply_deal_request(self, request: Mapping[str, object], volume: float) -> None:
+        symbol = str(request["symbol"])
+        order_type = int(cast(int | float | str, request["type"]))
+        position_ticket = request.get("position")
+        if position_ticket is None:
+            new_ticket = max((position.ticket for position in self.positions), default=1000) + 1
+            self.positions.append(
+                FakeMT5Position(
+                    ticket=new_ticket,
+                    symbol=symbol,
+                    volume=volume,
+                    type=order_type,
+                    price_open=float(cast(float | int | str, request.get("price", 0.0))),
+                    profit=0.0,
+                )
+            )
+            return
+
+        target_ticket = int(cast(int | float | str, position_ticket))
+        for index, position in enumerate(self.positions):
+            if position.ticket != target_ticket:
+                continue
+            remaining = round(position.volume - volume, 10)
+            if remaining <= 0:
+                del self.positions[index]
+            else:
+                self.positions[index] = FakeMT5Position(
+                    ticket=position.ticket,
+                    symbol=position.symbol,
+                    volume=remaining,
+                    type=position.type,
+                    price_open=position.price_open,
+                    profit=position.profit,
+                )
+            return

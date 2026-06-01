@@ -56,7 +56,7 @@ def parse_allowed_symbols(
             ),
         )
 
-    symbols = tuple(symbol.strip().upper() for symbol in raw_value.split(",") if symbol.strip())
+    symbols = tuple(symbol.strip() for symbol in raw_value.split(",") if symbol.strip())
     return symbols, ()
 
 

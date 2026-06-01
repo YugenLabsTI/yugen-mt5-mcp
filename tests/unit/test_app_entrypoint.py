@@ -38,10 +38,10 @@ def test_parse_allowed_symbols_defaults_to_empty_allowlist() -> None:
     assert warnings == ()
 
 
-def test_parse_allowed_symbols_normalizes_explicit_values() -> None:
-    symbols, warnings = parse_allowed_symbols({ALLOWED_SYMBOLS_ENV: " eurusd, XAUUSD ,,"})
+def test_parse_allowed_symbols_preserves_explicit_values() -> None:
+    symbols, warnings = parse_allowed_symbols({ALLOWED_SYMBOLS_ENV: " eurusd, Boom 1000 Index ,,"})
 
-    assert symbols == ("EURUSD", "XAUUSD")
+    assert symbols == ("eurusd", "Boom 1000 Index")
     assert warnings == ()
 
 

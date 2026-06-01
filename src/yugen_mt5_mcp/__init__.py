@@ -1,11 +1,13 @@
 """yugen_mt5_mcp package."""
 
 from .app import (
+    AUDIT_PATH_ENV,
     EntrypointWarning,
     RuntimeApp,
     build_runtime,
     emit_warnings,
     parse_allowed_symbols,
+    resolve_audit_path,
     run_stdio,
 )
 from .audit import AuditEvent, AuditStore
@@ -50,6 +52,7 @@ __all__ = [
     "AccountTradeMode",
     "AuditEvent",
     "AuditStore",
+    "AUDIT_PATH_ENV",
     "build_runtime",
     "build_auth_tag",
     "ChartBridgeAck",
@@ -85,6 +88,7 @@ __all__ = [
     "SessionRiskStore",
     "SCHEMA_VERSION",
     "parse_allowed_symbols",
+    "resolve_audit_path",
     "run_stdio",
     "Timeframe",
     "TradeAction",

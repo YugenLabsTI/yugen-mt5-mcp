@@ -62,6 +62,31 @@ The server connects to the already-open local MT5 terminal through the official
 MetaTrader5 Python IPC session. It does not need the account password because
 the terminal is already authenticated.
 
+### Claude Desktop example
+
+Claude Desktop should launch the server with a writable audit path. Prefer an
+absolute path so the server does not depend on Claude's process working
+directory:
+
+```json
+{
+  "mcpServers": {
+    "yugen-mt5": {
+      "command": "C:\\Users\\sgg10\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+      "args": ["-m", "yugen_mt5_mcp"],
+      "cwd": "C:\\Users\\sgg10\\Documents\\yugen-mt5-mcp",
+      "env": {
+        "YUGEN_MT5_ALLOWED_SYMBOLS": "EURUSD",
+        "YUGEN_MT5_AUDIT_PATH": "C:\\Users\\sgg10\\AppData\\Local\\Yugen\\mt5-mcp\\audit.sqlite3"
+      }
+    }
+  }
+}
+```
+
+`YUGEN_MT5_AUDIT_PATH` defaults to `var/audit.sqlite3`. Set it explicitly for
+desktop clients so audit storage lands in a user-writable directory.
+
 Remote startup is rejected if it tries to:
 
 - skip bearer auth,

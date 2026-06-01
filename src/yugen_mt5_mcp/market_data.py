@@ -189,20 +189,29 @@ class MarketDataService:
         return result
 
     def _validate_symbol(self, symbol: str) -> str:
-        normalized = symbol.strip().upper()
+        requested = symbol.strip()
         allowed = self._config.risk.allowed_symbols
-        if not normalized:
+        if not requested:
             raise MarketDataError("symbol is required")
         if allowed == ("*",):
-            return normalized
-        if allowed and normalized not in allowed:
-            raise MarketDataError(f"symbol is not allowed: {normalized}")
-        return normalized
+            return self._resolve_broker_symbol(requested)
+        if allowed:
+            for allowed_symbol in allowed:
+                if requested.casefold() == allowed_symbol.casefold():
+                    return allowed_symbol
+            raise MarketDataError(f"symbol is not allowed: {requested}")
+        return requested.upper()
 
     def _validate_optional_symbol(self, symbol: str | None) -> str | None:
         if symbol is None:
             return None
         return self._validate_symbol(symbol)
+
+    def _resolve_broker_symbol(self, requested: str) -> str:
+        for symbol in self._adapter.list_symbols():
+            if requested.casefold() == symbol.symbol.casefold():
+                return symbol.symbol
+        return requested
 
     def _validate_timeframe(self, timeframe: str) -> Timeframe:
         try:

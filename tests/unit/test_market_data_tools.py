@@ -7,7 +7,7 @@ from typing import TypedDict, cast
 
 import pytest
 
-from tests.fakes.fake_mt5 import FakeMT5Backend
+from tests.fakes.fake_mt5 import FakeMT5Backend, FakeMT5Symbol, FakeMT5Tick
 from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.config import AppConfig, RiskConfig
 from yugen_mt5_mcp.market_data import MarketDataError, MarketDataService
@@ -48,6 +48,53 @@ def test_wildcard_allowed_symbols_permits_read_tools(tmp_path: Path) -> None:
     tick = service.get_tick(symbol="eurusd")
 
     assert tick.symbol == "EURUSD"
+
+
+def test_wildcard_allowed_symbols_preserves_broker_symbol_casing(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit.sqlite3"
+    config = AppConfig(risk=RiskConfig(allowed_symbols=("*",)))
+    backend = FakeMT5Backend()
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=1000.1,
+        ask=1000.2,
+        last=1000.15,
+        time=1_704_110_400,
+    )
+    adapter = MT5Adapter(backend=backend)
+    service = MarketDataService(
+        config=config,
+        adapter=adapter,
+        audit_store=AuditStore(audit_path),
+    )
+
+    tick = service.get_tick(symbol="boom 1000 index")
+
+    assert tick.symbol == "Boom 1000 Index"
+    assert backend.selected_symbols[-1] == "Boom 1000 Index"
+
+
+def test_explicit_allowlist_preserves_configured_symbol_casing(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit.sqlite3"
+    config = AppConfig(risk=RiskConfig(allowed_symbols=("Boom 1000 Index",)))
+    backend = FakeMT5Backend()
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=1000.1,
+        ask=1000.2,
+        last=1000.15,
+        time=1_704_110_400,
+    )
+    adapter = MT5Adapter(backend=backend)
+    service = MarketDataService(
+        config=config,
+        adapter=adapter,
+        audit_store=AuditStore(audit_path),
+    )
+
+    tick = service.get_tick(symbol="BOOM 1000 INDEX")
+
+    assert tick.symbol == "Boom 1000 Index"
 
 
 @pytest.mark.parametrize(

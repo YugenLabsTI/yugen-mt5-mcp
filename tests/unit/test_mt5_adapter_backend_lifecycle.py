@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 from types import ModuleType
 
 import pytest
 
-from tests.fakes.fake_mt5 import FakeMT5Backend, FakeMT5Order, FakeMT5Position
+from tests.fakes.fake_mt5 import (
+    FakeMT5Backend,
+    FakeMT5Deal,
+    FakeMT5HistoryOrder,
+    FakeMT5Order,
+    FakeMT5Position,
+)
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter, MT5AdapterError, load_default_backend
 
 
@@ -20,6 +27,8 @@ class StrictOptionalSymbolBackend(FakeMT5Backend):
         super().__init__()
         self.position_call_kwargs: list[dict[str, object]] = []
         self.order_call_kwargs: list[dict[str, object]] = []
+        self.history_deal_call_kwargs: list[dict[str, object]] = []
+        self.history_order_call_kwargs: list[dict[str, object]] = []
 
     def positions_get(self, **kwargs: object) -> list[FakeMT5Position]:
         self.position_call_kwargs.append(dict(kwargs))
@@ -40,6 +49,38 @@ class StrictOptionalSymbolBackend(FakeMT5Backend):
         if symbol is None:
             return list(self.orders)
         return [item for item in self.orders if item.symbol == symbol]
+
+    def history_deals_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        **kwargs: object,
+    ) -> list[FakeMT5Deal]:
+        del date_from, date_to
+        self.history_deal_call_kwargs.append(dict(kwargs))
+        if kwargs.get("group") is None and "group" in kwargs:
+            self._last_error = (-2, 'Invalid "group" argument')
+            return None  # type: ignore[return-value]
+        group = kwargs.get("group")
+        if group is None:
+            return list(self.deals)
+        return [item for item in self.deals if item.symbol == group]
+
+    def history_orders_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        **kwargs: object,
+    ) -> list[FakeMT5HistoryOrder]:
+        del date_from, date_to
+        self.history_order_call_kwargs.append(dict(kwargs))
+        if kwargs.get("group") is None and "group" in kwargs:
+            self._last_error = (-2, 'Invalid "group" argument')
+            return None  # type: ignore[return-value]
+        group = kwargs.get("group")
+        if group is None:
+            return list(self.history_orders)
+        return [item for item in self.history_orders if item.symbol == group]
 
 
 def test_default_backend_initializes_imported_metatrader_module(
@@ -88,3 +129,31 @@ def test_optional_position_and_order_symbol_filter_is_sent_when_present() -> Non
 
     assert backend.position_call_kwargs == [{"symbol": "EURUSD"}]
     assert backend.order_call_kwargs == [{"symbol": "EURUSD"}]
+
+
+def test_optional_history_group_filter_is_omitted_when_absent() -> None:
+    backend = StrictOptionalSymbolBackend()
+    adapter = MT5Adapter(backend=backend)
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = datetime(2024, 1, 2, tzinfo=UTC)
+
+    deals = adapter.list_history_deals(start, end)
+    orders = adapter.list_history_orders(start, end)
+
+    assert len(deals) == 1
+    assert len(orders) == 1
+    assert backend.history_deal_call_kwargs == [{}]
+    assert backend.history_order_call_kwargs == [{}]
+
+
+def test_optional_history_group_filter_is_sent_when_present() -> None:
+    backend = StrictOptionalSymbolBackend()
+    adapter = MT5Adapter(backend=backend)
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = datetime(2024, 1, 2, tzinfo=UTC)
+
+    adapter.list_history_deals(start, end, "EURUSD")
+    adapter.list_history_orders(start, end, "EURUSD")
+
+    assert backend.history_deal_call_kwargs == [{"group": "EURUSD"}]
+    assert backend.history_order_call_kwargs == [{"group": "EURUSD"}]

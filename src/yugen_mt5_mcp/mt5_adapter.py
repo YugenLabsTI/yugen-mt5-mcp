@@ -193,9 +193,12 @@ def _as_datetime(timestamp: object) -> datetime:
 
 def load_default_backend() -> MetaTrader5API:
     try:
-        import MetaTrader5 as backend  # type: ignore[import-not-found]
+        import MetaTrader5 as backend
     except ImportError as error:  # pragma: no cover - exercised only with real MT5 installs
         raise MT5AdapterError("MetaTrader5 package is not installed") from error
+    if not backend.initialize():
+        code, detail = backend.last_error()
+        raise MT5AdapterError(f"MetaTrader5 initialize failed (last_error={code}: {detail})")
     return cast(MetaTrader5API, backend)
 
 
@@ -292,9 +295,14 @@ class MT5Adapter:
 
     def list_positions(self, symbol: str | None = None) -> list[PositionSnapshot]:
         account_mode = self.get_account().account_mode
+        callback = (
+            self._backend.positions_get
+            if symbol is None
+            else lambda: self._backend.positions_get(symbol=symbol)
+        )
         rows = self._call(
             "positions_get",
-            lambda: self._backend.positions_get(symbol=symbol),
+            callback,
         )
         return [
             PositionSnapshot(
@@ -310,7 +318,12 @@ class MT5Adapter:
         ]
 
     def list_orders(self, symbol: str | None = None) -> list[OrderSnapshot]:
-        rows = self._call("orders_get", lambda: self._backend.orders_get(symbol=symbol))
+        callback = (
+            self._backend.orders_get
+            if symbol is None
+            else lambda: self._backend.orders_get(symbol=symbol)
+        )
+        rows = self._call("orders_get", callback)
         return [
             OrderSnapshot(
                 ticket=int(_get_attr(row, "ticket")),

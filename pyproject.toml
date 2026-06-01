@@ -43,3 +43,7 @@ strict = true
 explicit_package_bases = true
 mypy_path = ["src"]
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = "MetaTrader5"
+ignore_missing_imports = true

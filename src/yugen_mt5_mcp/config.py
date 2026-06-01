@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import time
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -26,6 +27,17 @@ def _as_tuple(values: Any) -> tuple[str, ...]:
     if not isinstance(values, list | tuple):
         raise ConfigError("allowlist must be a list or tuple of CIDR strings")
     return tuple(str(value) for value in values)
+
+
+def _as_optional_time(value: Any) -> time | None:
+    if value is None:
+        return None
+    if isinstance(value, time):
+        return value
+    try:
+        return time.fromisoformat(str(value))
+    except ValueError as error:
+        raise ConfigError(f"invalid trading window time: {value}") from error
 
 
 @dataclass(slots=True, frozen=True)
@@ -90,10 +102,13 @@ class TransportConfig:
 @dataclass(slots=True, frozen=True)
 class RiskConfig:
     allowed_symbols: tuple[str, ...] = ()
+    allowed_account_modes: tuple[str, ...] = ()
     max_order_volume: Decimal = Decimal("1.0")
-    max_total_exposure: Decimal = Decimal("1.0")
+    max_symbol_exposure: Decimal = Decimal("1.0")
     allow_live_trading: bool = False
     allow_real_accounts: bool = False
+    trading_window_start: time | None = None
+    trading_window_end: time | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -134,10 +149,13 @@ class AppConfig:
         )
         risk = RiskConfig(
             allowed_symbols=_as_tuple(risk_data.get("allowed_symbols", ())),
+            allowed_account_modes=_as_tuple(risk_data.get("allowed_account_modes", ())),
             max_order_volume=Decimal(str(risk_data.get("max_order_volume", "1.0"))),
-            max_total_exposure=Decimal(str(risk_data.get("max_total_exposure", "1.0"))),
+            max_symbol_exposure=Decimal(str(risk_data.get("max_symbol_exposure", "1.0"))),
             allow_live_trading=bool(risk_data.get("allow_live_trading", False)),
             allow_real_accounts=bool(risk_data.get("allow_real_accounts", False)),
+            trading_window_start=_as_optional_time(risk_data.get("trading_window_start")),
+            trading_window_end=_as_optional_time(risk_data.get("trading_window_end")),
         )
 
         config = cls(transport=transport, audit=audit, risk=risk)

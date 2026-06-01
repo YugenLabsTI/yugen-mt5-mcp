@@ -21,6 +21,12 @@ class AccountMode(StrEnum):
     HEDGING = "hedging"
 
 
+class AccountTradeMode(StrEnum):
+    DEMO = "demo"
+    CONTEST = "contest"
+    REAL = "real"
+
+
 class Timeframe(StrEnum):
     M1 = "M1"
     M5 = "M5"
@@ -69,6 +75,7 @@ class AccountSnapshot:
     currency: str
     company: str
     account_mode: AccountMode
+    trade_mode: AccountTradeMode
 
 
 @dataclass(slots=True, frozen=True)
@@ -116,6 +123,24 @@ class HistoryOrderSnapshot:
     observed_at: datetime
 
 
+@dataclass(slots=True, frozen=True)
+class TradeCheckResult:
+    retcode: int
+    comment: str
+    volume: float
+    price: float
+
+
+@dataclass(slots=True, frozen=True)
+class TradeResult:
+    retcode: int
+    comment: str
+    order: int
+    deal: int
+    volume: float
+    price: float
+
+
 class MetaTrader5API(Protocol):
     TIMEFRAME_M1: int
     TIMEFRAME_M5: int
@@ -123,6 +148,13 @@ class MetaTrader5API(Protocol):
     ACCOUNT_MARGIN_MODE_RETAIL_NETTING: int
     ACCOUNT_MARGIN_MODE_EXCHANGE: int
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING: int
+    ACCOUNT_TRADE_MODE_DEMO: int
+    ACCOUNT_TRADE_MODE_CONTEST: int
+    ACCOUNT_TRADE_MODE_REAL: int
+    TRADE_ACTION_DEAL: int
+    TRADE_ACTION_SLTP: int
+    ORDER_TYPE_BUY: int
+    ORDER_TYPE_SELL: int
 
     def symbols_get(self) -> Sequence[object] | None: ...
     def symbol_select(self, symbol: str, enable: bool) -> bool: ...
@@ -139,6 +171,8 @@ class MetaTrader5API(Protocol):
     def history_orders_get(
         self, date_from: datetime, date_to: datetime, *, group: str | None = None
     ) -> Sequence[object] | None: ...
+    def order_check(self, request: Mapping[str, object]) -> object | None: ...
+    def order_send(self, request: Mapping[str, object]) -> object | None: ...
     def last_error(self) -> tuple[int, str]: ...
 
 
@@ -169,6 +203,22 @@ class MT5Adapter:
     def __init__(self, backend: MetaTrader5API | None = None) -> None:
         self._backend = backend or load_default_backend()
         self._lock = Lock()
+
+    @property
+    def trade_action_deal(self) -> int:
+        return self._backend.TRADE_ACTION_DEAL
+
+    @property
+    def trade_action_sltp(self) -> int:
+        return self._backend.TRADE_ACTION_SLTP
+
+    @property
+    def order_type_buy(self) -> int:
+        return self._backend.ORDER_TYPE_BUY
+
+    @property
+    def order_type_sell(self) -> int:
+        return self._backend.ORDER_TYPE_SELL
 
     def list_symbols(self) -> list[SymbolInfo]:
         rows = self._call("symbols_get", self._backend.symbols_get)
@@ -237,6 +287,7 @@ class MT5Adapter:
             currency=str(_get_attr(row, "currency")),
             company=str(_get_attr(row, "company")),
             account_mode=self._account_mode(int(_get_attr(row, "margin_mode"))),
+            trade_mode=self._trade_mode(int(_get_attr(row, "trade_mode"))),
         )
 
     def list_positions(self, symbol: str | None = None) -> list[PositionSnapshot]:
@@ -314,6 +365,34 @@ class MT5Adapter:
             for row in rows
         ]
 
+    def check_trade(self, request: Mapping[str, object]) -> TradeCheckResult:
+        row = self._call_single(
+            "order_check",
+            lambda: self._backend.order_check(request),
+            empty_message="order check failed",
+        )
+        return TradeCheckResult(
+            retcode=int(_get_attr(row, "retcode")),
+            comment=str(_get_attr(row, "comment")),
+            volume=_as_float(row, "volume"),
+            price=_as_float(row, "price"),
+        )
+
+    def send_trade(self, request: Mapping[str, object]) -> TradeResult:
+        row = self._call_single(
+            "order_send",
+            lambda: self._backend.order_send(request),
+            empty_message="trade send failed",
+        )
+        return TradeResult(
+            retcode=int(_get_attr(row, "retcode")),
+            comment=str(_get_attr(row, "comment")),
+            order=int(_get_attr(row, "order")),
+            deal=int(_get_attr(row, "deal")),
+            volume=_as_float(row, "volume"),
+            price=_as_float(row, "price"),
+        )
+
     def _timeframe_code(self, timeframe: Timeframe) -> int:
         mapping = {
             Timeframe.M1: self._backend.TIMEFRAME_M1,
@@ -331,6 +410,15 @@ class MT5Adapter:
         }:
             return AccountMode.NETTING
         raise MT5AdapterError(f"unsupported MT5 account margin mode: {margin_mode}")
+
+    def _trade_mode(self, trade_mode: int) -> AccountTradeMode:
+        if trade_mode == self._backend.ACCOUNT_TRADE_MODE_DEMO:
+            return AccountTradeMode.DEMO
+        if trade_mode == self._backend.ACCOUNT_TRADE_MODE_CONTEST:
+            return AccountTradeMode.CONTEST
+        if trade_mode == self._backend.ACCOUNT_TRADE_MODE_REAL:
+            return AccountTradeMode.REAL
+        raise MT5AdapterError(f"unsupported MT5 account trade mode: {trade_mode}")
 
     def _ensure_symbol_selected(self, symbol: str) -> None:
         if self._call_boolean(

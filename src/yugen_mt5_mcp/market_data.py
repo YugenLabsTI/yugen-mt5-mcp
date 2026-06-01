@@ -193,6 +193,8 @@ class MarketDataService:
         allowed = self._config.risk.allowed_symbols
         if not normalized:
             raise MarketDataError("symbol is required")
+        if allowed == ("*",):
+            return normalized
         if allowed and normalized not in allowed:
             raise MarketDataError(f"symbol is not allowed: {normalized}")
         return normalized

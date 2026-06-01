@@ -16,6 +16,9 @@ dependencies = [
   "fastmcp>=2.10,<4.0",
 ]
 
+[project.scripts]
+yugen-mt5-mcp = "yugen_mt5_mcp.app:main"
+
 [project.optional-dependencies]
 dev = [
   "mypy>=1.10,<2.0",

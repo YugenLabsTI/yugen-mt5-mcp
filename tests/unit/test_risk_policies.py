@@ -154,3 +154,27 @@ def test_risk_policy_blocks_excess_exposure(tmp_path: Path) -> None:
                 positions=adapter.list_positions("EURUSD"),
             )
         )
+
+
+def test_wildcard_allowed_symbols_does_not_relax_trading_gates(tmp_path: Path) -> None:
+    policy, adapter, _, _ = build_policy(
+        tmp_path,
+        risk_config=RiskConfig(
+            allowed_symbols=("*",),
+            allowed_account_modes=("hedging",),
+            allow_live_trading=True,
+        ),
+    )
+
+    with pytest.raises(RiskPolicyError, match="symbol is not allowed"):
+        policy.validate(
+            RiskCheckRequest(
+                session_id="session-1",
+                actor="agent:test",
+                action=TradeAction.OPEN,
+                symbol="EURUSD",
+                volume=Decimal("0.10"),
+                account=adapter.get_account(),
+                positions=adapter.list_positions("EURUSD"),
+            )
+        )

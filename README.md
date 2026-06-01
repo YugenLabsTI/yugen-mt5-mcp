@@ -10,10 +10,57 @@ Secure MCP server foundations for MetaTrader 5 with audited trading controls, lo
 
 ## Transport modes
 
+MCP transport defines how an MCP client talks to this server. It does not change
+the tools themselves; it changes the communication channel.
+
 | Mode | Default | Requirements | Notes |
 |------|---------|--------------|-------|
-| `stdio` | Yes | None | No TCP listener is opened. |
+| `stdio` | Yes | Client starts the local process | No TCP listener is opened; the client exchanges JSON over the process stdin/stdout pipes. |
 | `remote` | No | `tls_terminated=true`, `reverse_proxy="caddy"`, bearer token, non-public bind, non-empty allowlist | Intended for VPS deployments with Caddy terminating TLS and proxying to the local MCP process. |
+
+Use `stdio` when the MCP client and MT5 terminal are on the same Windows host.
+Use `remote` only when another machine or environment, such as WSL or a VPS
+client, must reach the Windows-hosted server over a network boundary.
+
+## Run on Windows with stdio
+
+1. Open MetaTrader 5 and log into a demo account.
+2. Install the package in editable mode:
+
+   ```powershell
+   python -m pip install -e ".[dev]"
+   ```
+
+3. Choose the read-symbol allowlist:
+
+   ```powershell
+   $env:YUGEN_MT5_ALLOWED_SYMBOLS="EURUSD,XAUUSD"
+   ```
+
+   For exploration only, `*` allows every symbol for read tools:
+
+   ```powershell
+   $env:YUGEN_MT5_ALLOWED_SYMBOLS="*"
+   ```
+
+   Wildcard mode prints a warning at startup. It does not relax trading risk
+   gates.
+
+4. Start the stdio MCP server:
+
+   ```powershell
+   python -m yugen_mt5_mcp
+   ```
+
+   If installed as a script, this is equivalent:
+
+   ```powershell
+   yugen-mt5-mcp
+   ```
+
+The server connects to the already-open local MT5 terminal through the official
+MetaTrader5 Python IPC session. It does not need the account password because
+the terminal is already authenticated.
 
 Remote startup is rejected if it tries to:
 

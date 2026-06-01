@@ -113,6 +113,8 @@ class FakeMT5Backend:
         now = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
         timestamp = int(now.timestamp())
         self.selected_symbols: list[str] = []
+        self.initialized = False
+        self.shutdown_called = False
         self._last_error: tuple[int, str] = (0, "OK")
         self.order_check_result = FakeMT5TradeResult(
             retcode=self.TRADE_RETCODE_DONE,
@@ -219,6 +221,13 @@ class FakeMT5Backend:
 
     def symbols_get(self) -> list[FakeMT5Symbol]:
         return list(self.symbols)
+
+    def initialize(self) -> bool:
+        self.initialized = True
+        return True
+
+    def shutdown(self) -> None:
+        self.shutdown_called = True
 
     def symbol_select(self, symbol: str, enable: bool) -> bool:
         if enable and any(item.name == symbol for item in self.symbols):

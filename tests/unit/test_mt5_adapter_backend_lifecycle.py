@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from datetime import UTC, datetime
 from types import ModuleType
+from typing import Any, cast
 
 import pytest
 
@@ -12,8 +13,9 @@ from tests.fakes.fake_mt5 import (
     FakeMT5HistoryOrder,
     FakeMT5Order,
     FakeMT5Position,
+    FakeMT5Symbol,
 )
-from yugen_mt5_mcp.mt5_adapter import MT5Adapter, MT5AdapterError, load_default_backend
+from yugen_mt5_mcp.mt5_adapter import MT5Adapter, MT5AdapterError, Timeframe, load_default_backend
 
 
 class ImportableFakeMT5Backend(FakeMT5Backend, ModuleType):
@@ -81,6 +83,14 @@ class StrictOptionalSymbolBackend(FakeMT5Backend):
         if group is None:
             return list(self.history_orders)
         return [item for item in self.history_orders if item.symbol == group]
+
+
+class StructuredRow:
+    def __init__(self, values: dict[str, object]) -> None:
+        self._values = values
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
 
 
 def test_default_backend_initializes_imported_metatrader_module(
@@ -157,3 +167,28 @@ def test_optional_history_group_filter_is_sent_when_present() -> None:
 
     assert backend.history_deal_call_kwargs == [{"group": "EURUSD"}]
     assert backend.history_order_call_kwargs == [{"group": "EURUSD"}]
+
+
+def test_candles_accept_structured_rows_without_attributes() -> None:
+    backend = FakeMT5Backend()
+    backend.rates[("Boom 1000 Index", backend.TIMEFRAME_M1)] = cast(Any, [
+        StructuredRow(
+            {
+                "time": 1_704_110_400,
+                "open": 14070.0,
+                "high": 14080.0,
+                "low": 14060.0,
+                "close": 14076.0,
+                "tick_volume": 10,
+                "spread": 100,
+                "real_volume": 0,
+            }
+        )
+    ])
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    adapter = MT5Adapter(backend=backend)
+
+    candles = adapter.get_candles("Boom 1000 Index", Timeframe.M1, 1)
+
+    assert candles[0].open == 14070.0
+    assert candles[0].close == 14076.0

@@ -179,6 +179,10 @@ class MetaTrader5API(Protocol):
 def _get_attr(payload: object, key: str) -> Any:
     if isinstance(payload, Mapping):
         return payload[key]
+    try:
+        return payload[key]  # type: ignore[index]
+    except (KeyError, TypeError, IndexError):
+        pass
     return getattr(payload, key)
 
 

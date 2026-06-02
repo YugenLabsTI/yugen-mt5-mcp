@@ -131,6 +131,10 @@ def create_default_doctor(
                 "runtime_context",
                 lambda: _check_runtime_context(config, entrypoint_warnings),
             ),
+            _CallableDoctorCheck(
+                "real_account_consent",
+                lambda: _check_real_account_consent(config),
+            ),
         ),
     )
     return DoctorService(checks=checks)
@@ -265,6 +269,38 @@ def _check_runtime_context(
         severity=DoctorSeverity.INFO,
         summary="Runtime context is configured without non-blocking warnings.",
         details=details,
+    )
+
+
+def _check_real_account_consent(config: AppConfig) -> DoctorCheckResult:
+    """Passive check: emit WARNING when ambient env-var consent is active.
+
+    Real-account consent via environment variable (real_account_consent_env=True)
+    means ANY session can place real-money trades without explicit per-session
+    human acknowledgement.  This is intentional but must remain visible.
+    The check is purely passive — it reads config only, no state mutations.
+    """
+    if config.risk.real_account_consent_env:
+        return DoctorCheckResult(
+            name="real_account_consent",
+            status=DoctorStatus.WARN,
+            severity=DoctorSeverity.WARNING,
+            summary="Real-account trading consent is pre-authorized via environment variable.",
+            details={
+                "consent_source": "env",
+                "allow_real_accounts": config.risk.allow_real_accounts,
+            },
+            remediation=(
+                "Remove YUGEN_MT5_REAL_ACCOUNT_CONSENT to require per-session human "
+                "acknowledgement before real-money trading operations."
+            ),
+        )
+    return DoctorCheckResult(
+        name="real_account_consent",
+        status=DoctorStatus.OK,
+        severity=DoctorSeverity.INFO,
+        summary="Real-account consent requires explicit per-session acknowledgement.",
+        details={"consent_source": "session"},
     )
 
 

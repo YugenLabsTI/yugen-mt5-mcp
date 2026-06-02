@@ -185,7 +185,9 @@ def test_server_registration_preserves_existing_tool_contracts(tmp_path: Path) -
 
     tool_schemas = asyncio.run(inspect_tools())
 
-    assert list(tool_schemas) == [
+    # REQ-8.2: chart tools are always registered (even when disabled), so we assert
+    # membership rather than exact list equality.
+    for expected_name in [
         "list_symbols",
         "get_tick",
         "get_candles",
@@ -193,7 +195,8 @@ def test_server_registration_preserves_existing_tool_contracts(tmp_path: Path) -
         "list_positions",
         "list_orders",
         "get_history",
-    ]
+    ]:
+        assert expected_name in tool_schemas, f"Expected {expected_name!r} in registered tools"
     assert tool_schemas["list_symbols"] == {
         "type": "object",
         "properties": {},
@@ -262,7 +265,9 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
     tool_names, payload = asyncio.run(inspect_and_call_doctor())
     report = cast(dict[str, object], payload)
 
-    assert tool_names == [
+    # REQ-8.2: chart tools are always registered (even when disabled), so we assert
+    # membership rather than exact list equality.
+    for expected_name in [
         "list_symbols",
         "get_tick",
         "get_candles",
@@ -271,7 +276,8 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
         "list_orders",
         "get_history",
         "doctor",
-    ]
+    ]:
+        assert expected_name in tool_names, f"Expected {expected_name!r} in registered tools"
     assert report["status"] == "ok"
     assert isinstance(report["generated_at"], str)
     checks = cast(list[dict[str, object]], report["checks"])

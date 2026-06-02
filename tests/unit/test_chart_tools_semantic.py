@@ -71,12 +71,51 @@ def _tool_names_from_server(mcp: FastMCP) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# REQ-8.2 + C-6: tools absent when chart_client is None
+# REQ-8.1 + REQ-8.2: tools ALWAYS registered; disabled-state returns typed error
 # ---------------------------------------------------------------------------
 
+_DISABLED_ARGS: list[tuple[str, dict]] = [
+    ("draw_sl_line", {"symbol": "EURUSD", "price": 1.085}),
+    ("draw_tp_line", {"symbol": "GBPUSD", "price": 1.273}),
+    (
+        "draw_zone",
+        {"symbol": "EURUSD", "price_low": 1.082, "price_high": 1.086},
+    ),
+    (
+        "draw_trend_line",
+        {
+            "symbol": "USDJPY",
+            "point1": {"time": "2026-06-01T08:00:00Z", "price": 156.5},
+            "point2": {"time": "2026-06-02T12:00:00Z", "price": 157.2},
+        },
+    ),
+    (
+        "annotate_text",
+        {
+            "symbol": "EURUSD",
+            "time": "2026-06-02T09:00:00Z",
+            "price": 1.084,
+            "text": "signal",
+        },
+    ),
+    (
+        "draw_object",
+        {
+            "object_type": "OBJ_ARROW",
+            "properties": {},
+            "points": [{"price": 1.0}],
+            "symbol": "EURUSD",
+        },
+    ),
+    ("list_charts", {}),
+    ("delete_chart_object", {"name": "yugen_sl_abc"}),
+    ("clear_yugen_objects", {}),
+]
+
+
 class TestChartToolsRegistration:
-    def test_chart_tools_absent_when_client_is_none(self, tmp_path: Path) -> None:
-        """No chart tools registered when chart_client is None (bridge disabled)."""
+    def test_chart_tools_present_when_client_is_none(self, tmp_path: Path) -> None:
+        """REQ-8.2: chart tools ARE registered even when bridge is disabled (client=None)."""
         from tests.fakes.fake_mt5 import FakeMT5Backend
         from yugen_mt5_mcp.app import AppConfig, AuditConfig, RiskConfig
         from yugen_mt5_mcp.market_data import MarketDataService
@@ -86,10 +125,13 @@ class TestChartToolsRegistration:
         adapter = MT5Adapter(backend=FakeMT5Backend())
         audit_store = AuditStore(tmp_path / "a.db")
         market_data = MarketDataService(config=config, adapter=adapter, audit_store=audit_store)
-        server = create_server(market_data)  # no chart_client
+        server = create_server(market_data)  # no chart_client → disabled
         names = _tool_names_from_server(server)
         for name in CHART_TOOL_NAMES:
-            assert name not in names, f"Expected {name!r} to be absent when bridge disabled"
+            assert name in names, (
+                f"REQ-8.2: {name!r} must be visible in the tool surface "
+                "even when bridge is disabled"
+            )
 
     def test_chart_tools_present_when_client_is_provided(self, tmp_path: Path) -> None:
         """All chart tools registered when chart_client is supplied."""
@@ -429,3 +471,113 @@ class TestAnnotateText:
         assert result["status"] == "error"
         assert result["error_code"] == "invalid_params"
         client.create_object.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# REQ-8.2: disabled-state invocation — all 9 tools return service_unavailable
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+class TestChartToolsDisabledBehavior:
+    """REQ-8.2: when bridge is disabled (client=None), each tool returns the typed error."""
+
+    def _make_disabled_server(self, tmp_path: Path) -> FastMCP:
+        from tests.fakes.fake_mt5 import FakeMT5Backend
+        from yugen_mt5_mcp.app import AppConfig, AuditConfig, RiskConfig
+        from yugen_mt5_mcp.market_data import MarketDataService
+        from yugen_mt5_mcp.mt5_adapter import MT5Adapter
+
+        config = AppConfig(audit=AuditConfig(database_path=tmp_path / "a.db"), risk=RiskConfig())
+        adapter = MT5Adapter(backend=FakeMT5Backend())
+        audit_store = AuditStore(tmp_path / "a.db")
+        market_data = MarketDataService(config=config, adapter=adapter, audit_store=audit_store)
+        return create_server(market_data)  # chart_client=None → disabled
+
+    @pytest.mark.parametrize("tool_name,args", _DISABLED_ARGS)
+    def test_disabled_tool_returns_service_unavailable(
+        self, tmp_path: Path, tool_name: str, args: dict
+    ) -> None:
+        """Every chart tool invoked when disabled MUST return service_unavailable (REQ-8.2)."""
+        mcp = self._make_disabled_server(tmp_path)
+        result = _call_tool(mcp, tool_name, args)
+        # list_charts returns a list on success; when disabled it returns a dict
+        if isinstance(result, list):
+            # Should not happen in disabled state
+            raise AssertionError(
+                f"{tool_name!r}: expected error dict, got list — disabled guard not active"
+            )
+        assert result.get("status") == "error", (
+            f"{tool_name!r}: expected status='error', got {result!r}"
+        )
+        assert result.get("error_code") == "service_unavailable", (
+            f"{tool_name!r}: expected error_code='service_unavailable', "
+            f"got {result.get('error_code')!r}"
+        )
+        msg = result.get("error_message", "")
+        assert "YUGEN_MT5_CHART_SHARED_SECRET" in str(msg), (
+            f"{tool_name!r}: error_message must mention YUGEN_MT5_CHART_SHARED_SECRET; got {msg!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# S-C2-1: draw_trend_line — absent/None price must be rejected (not silently 0.0)
+# ---------------------------------------------------------------------------
+
+class TestDrawTrendLineAbsentPrice:
+    """S-C2-1: absent or None price in a trend line point must be rejected with invalid_params."""
+
+    def test_rejects_absent_price_in_point1(self, tmp_path: Path) -> None:
+        """point1 without 'price' key → invalid_params (not silently 0.0)."""
+        client = _fake_client(tmp_path)
+        client.create_object = MagicMock()  # type: ignore[method-assign]
+
+        mcp = FastMCP(name="test")
+        register_chart_tools(mcp, client)
+        result = _call_tool(mcp, "draw_trend_line", {
+            "symbol": "USDJPY",
+            "point1": {"time": "2026-06-01T08:00:00Z"},  # price key absent
+            "point2": {"time": "2026-06-02T12:00:00Z", "price": 157.2},
+        })
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "invalid_params"
+        client.create_object.assert_not_called()
+
+    def test_rejects_none_price_in_point2(self, tmp_path: Path) -> None:
+        """point2 with price=None → invalid_params (caller must supply an explicit float)."""
+        client = _fake_client(tmp_path)
+        client.create_object = MagicMock()  # type: ignore[method-assign]
+
+        mcp = FastMCP(name="test")
+        register_chart_tools(mcp, client)
+        result = _call_tool(mcp, "draw_trend_line", {
+            "symbol": "USDJPY",
+            "point1": {"time": "2026-06-01T08:00:00Z", "price": 156.5},
+            "point2": {"time": "2026-06-02T12:00:00Z", "price": None},
+        })
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "invalid_params"
+        client.create_object.assert_not_called()
+
+    def test_accepts_explicit_zero_price(self, tmp_path: Path) -> None:
+        """An explicit price=0.0 from the caller is allowed — it's a deliberate choice."""
+        client = _fake_client(tmp_path)
+        ack = ChartBridgeAck(request_id="r1", action="create_object", status="ok", verified=True)
+        client.create_object = MagicMock(return_value=ack)  # type: ignore[method-assign]
+
+        mcp = FastMCP(name="test")
+        register_chart_tools(mcp, client)
+        result = _call_tool(mcp, "draw_trend_line", {
+            "symbol": "USDJPY",
+            "point1": {"time": "2026-06-01T08:00:00Z", "price": 0.0},
+            "point2": {"time": "2026-06-02T12:00:00Z", "price": 157.2},
+        })
+
+        # explicit 0.0 is a valid caller choice; must succeed
+        assert result["status"] == "ok"
+        assert result["name"].startswith("yugen_trend_")
+        spec = client.create_object.call_args.kwargs["object_spec"]
+        assert spec.points[0].price == 0.0

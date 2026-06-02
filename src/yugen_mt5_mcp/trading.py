@@ -22,7 +22,12 @@ _BULK_FILTER_ALL = "all"
 _BULK_FILTER_PROFITABLE = "profitable"
 _BULK_FILTER_LOSING = "losing"
 
-_SUCCESS_RETCODES = {10009, 10010}
+# order_send reports a filled/partially-filled deal with these codes.
+_SEND_SUCCESS_RETCODES = {10009, 10010}
+# order_check reports a valid request with retcode 0 / comment "Done"; some
+# builds echo the order_send "done" codes. Genuine validation errors use
+# distinct reject/invalid retcodes and are still surfaced as failures.
+_CHECK_SUCCESS_RETCODES = {0, *_SEND_SUCCESS_RETCODES}
 
 
 class TradeSide(StrEnum):
@@ -249,6 +254,7 @@ class TradingService:
         self._ensure_success_retcode(
             "order_check",
             check_result,
+            success_retcodes=_CHECK_SUCCESS_RETCODES,
             approval=approval,
             idempotency_key=idempotency_key,
         )
@@ -279,6 +285,7 @@ class TradingService:
         self._ensure_success_retcode(
             "order_send",
             trade_result,
+            success_retcodes=_SEND_SUCCESS_RETCODES,
             approval=approval,
             idempotency_key=idempotency_key,
         )
@@ -587,10 +594,11 @@ class TradingService:
         operation: str,
         result: TradeCheckResult | TradeResult,
         *,
+        success_retcodes: set[int],
         approval: RiskApproval,
         idempotency_key: str,
     ) -> None:
-        if result.retcode in _SUCCESS_RETCODES:
+        if result.retcode in success_retcodes:
             return
         self._audit(
             "trade.execute",

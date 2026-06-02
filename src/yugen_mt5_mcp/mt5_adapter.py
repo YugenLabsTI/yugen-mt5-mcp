@@ -161,8 +161,15 @@ class MetaTrader5API(Protocol):
     ACCOUNT_TRADE_MODE_REAL: int
     TRADE_ACTION_DEAL: int
     TRADE_ACTION_SLTP: int
+    TRADE_ACTION_PENDING: int
+    TRADE_ACTION_REMOVE: int
+    TRADE_ACTION_MODIFY: int
     ORDER_TYPE_BUY: int
     ORDER_TYPE_SELL: int
+    ORDER_TYPE_BUY_LIMIT: int
+    ORDER_TYPE_SELL_LIMIT: int
+    ORDER_TYPE_BUY_STOP: int
+    ORDER_TYPE_SELL_STOP: int
 
     def symbols_get(self) -> Sequence[object] | None: ...
     def symbol_select(self, symbol: str, enable: bool) -> bool: ...
@@ -228,12 +235,40 @@ class MT5Adapter:
         return self._backend.TRADE_ACTION_SLTP
 
     @property
+    def trade_action_pending(self) -> int:
+        return self._backend.TRADE_ACTION_PENDING
+
+    @property
+    def trade_action_remove(self) -> int:
+        return self._backend.TRADE_ACTION_REMOVE
+
+    @property
+    def trade_action_modify(self) -> int:
+        return self._backend.TRADE_ACTION_MODIFY
+
+    @property
     def order_type_buy(self) -> int:
         return self._backend.ORDER_TYPE_BUY
 
     @property
     def order_type_sell(self) -> int:
         return self._backend.ORDER_TYPE_SELL
+
+    @property
+    def order_type_buy_limit(self) -> int:
+        return self._backend.ORDER_TYPE_BUY_LIMIT
+
+    @property
+    def order_type_sell_limit(self) -> int:
+        return self._backend.ORDER_TYPE_SELL_LIMIT
+
+    @property
+    def order_type_buy_stop(self) -> int:
+        return self._backend.ORDER_TYPE_BUY_STOP
+
+    @property
+    def order_type_sell_stop(self) -> int:
+        return self._backend.ORDER_TYPE_SELL_STOP
 
     def list_symbols(self) -> list[SymbolInfo]:
         rows = self._call("symbols_get", self._backend.symbols_get)

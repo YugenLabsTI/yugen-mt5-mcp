@@ -95,6 +95,7 @@ class TradingService:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         comment: str | None = None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
@@ -126,6 +127,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def close_position(
@@ -136,6 +138,7 @@ class TradingService:
         symbol: str,
         volume: Decimal,
         ticket: int | None = None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
@@ -172,6 +175,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def modify_position_levels(
@@ -183,6 +187,7 @@ class TradingService:
         ticket: int,
         stop_loss: float | None,
         take_profit: float | None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
@@ -211,6 +216,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def _execute_trade(
@@ -219,6 +225,7 @@ class TradingService:
         approval: RiskApproval,
         idempotency_key: str,
         request: Mapping[str, object],
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         self._ensure_idempotency_key(idempotency_key)
         duplicate = self._executed_requests.get(idempotency_key)
@@ -238,6 +245,22 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
         )
+
+        # --- dry-run branch: validate only, do NOT send or cache ---
+        if dry_run:
+            return ExecutedTrade(
+                idempotency_key=idempotency_key,
+                action=approval.action.value,
+                symbol=approval.symbol,
+                requested_volume=approval.volume,
+                retcode=check_result.retcode,
+                order=0,
+                deal=0,
+                executed_volume=check_result.volume,
+                executed_price=check_result.price,
+                comment=check_result.comment,
+                dry_run=True,
+            )
 
         trade_result = self._adapter.send_trade(request)
         self._ensure_success_retcode(
@@ -324,6 +347,7 @@ class TradingService:
         order_type: int,
         price: float | None = None,
         position: int | None = None,
+        order: int | None = None,
         stop_loss: float | None = None,
         take_profit: float | None = None,
         comment: str | None = None,
@@ -338,6 +362,8 @@ class TradingService:
             request["price"] = price
         if position is not None:
             request["position"] = position
+        if order is not None:
+            request["order"] = order
         if stop_loss is not None:
             request["sl"] = stop_loss
         if take_profit is not None:
@@ -345,6 +371,125 @@ class TradingService:
         if comment is not None:
             request["comment"] = comment
         return request
+
+    def place_pending_order(
+        self,
+        *,
+        session_id: str,
+        idempotency_key: str,
+        symbol: str,
+        order_type: str,
+        volume: Decimal,
+        price: float,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        comment: str | None = None,
+        dry_run: bool = False,
+    ) -> ExecutedTrade:
+        account = self._adapter.get_account()
+        positions = self._adapter.list_positions(symbol)
+        approval = self._risk_policy.validate(
+            RiskCheckRequest(
+                session_id=session_id,
+                actor=self._actor,
+                action=TradeAction.PLACE_PENDING,
+                symbol=symbol,
+                volume=volume,
+                account=account,
+                positions=positions,
+            )
+        )
+        mt5_order_type = self._order_type_for_pending(order_type)
+        request = self._build_request(
+            action=self._adapter.trade_action_pending,
+            symbol=symbol,
+            volume=volume,
+            order_type=mt5_order_type,
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            comment=comment,
+        )
+        return self._execute_trade(
+            approval=approval,
+            idempotency_key=idempotency_key,
+            request=request,
+            dry_run=dry_run,
+        )
+
+    def modify_pending_order(
+        self,
+        *,
+        session_id: str,
+        idempotency_key: str,
+        ticket: int,
+        symbol: str,
+        price: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        dry_run: bool = False,
+    ) -> ExecutedTrade:
+        account = self._adapter.get_account()
+        orders = self._adapter.list_orders(symbol)
+        target_order = self._find_order(ticket=ticket, symbol=symbol, orders=orders)
+        approval = self._risk_policy.validate(
+            RiskCheckRequest(
+                session_id=session_id,
+                actor=self._actor,
+                action=TradeAction.MODIFY,
+                symbol=symbol,
+                volume=Decimal(str(target_order.volume_initial)),
+                account=account,
+                positions=self._adapter.list_positions(symbol),
+            )
+        )
+        request = self._build_order_request(
+            action=self._adapter.trade_action_modify,
+            order=ticket,
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
+        return self._execute_trade(
+            approval=approval,
+            idempotency_key=idempotency_key,
+            request=request,
+            dry_run=dry_run,
+        )
+
+    def cancel_pending_order(
+        self,
+        *,
+        session_id: str,
+        idempotency_key: str,
+        ticket: int,
+        symbol: str,
+        dry_run: bool = False,
+    ) -> ExecutedTrade:
+        account = self._adapter.get_account()
+        orders = self._adapter.list_orders(symbol)
+        target_order = self._find_order(ticket=ticket, symbol=symbol, orders=orders)
+        approval = self._risk_policy.validate(
+            RiskCheckRequest(
+                session_id=session_id,
+                actor=self._actor,
+                action=TradeAction.CANCEL_PENDING,
+                symbol=symbol,
+                volume=Decimal(str(target_order.volume_initial)),
+                account=account,
+                positions=self._adapter.list_positions(symbol),
+            )
+        )
+        request = self._build_order_request(
+            action=self._adapter.trade_action_remove,
+            order=ticket,
+        )
+        return self._execute_trade(
+            approval=approval,
+            idempotency_key=idempotency_key,
+            request=request,
+            dry_run=dry_run,
+        )
 
     def _order_type_for_side(self, side: TradeSide) -> int:
         if side is TradeSide.BUY:
@@ -355,6 +500,54 @@ class TradingService:
         if position.order_type == self._adapter.order_type_buy:
             return self._adapter.order_type_sell
         return self._adapter.order_type_buy
+
+    def _find_order(
+        self,
+        *,
+        ticket: int,
+        symbol: str,
+        orders: list[Any],
+    ) -> Any:
+        for order in orders:
+            if order.ticket == ticket and order.symbol == symbol:
+                return order
+        raise TradingError(f"order ticket not found for symbol: {ticket}/{symbol}")
+
+    def _build_order_request(
+        self,
+        *,
+        action: int,
+        order: int,
+        price: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> dict[str, object]:
+        request: dict[str, object] = {
+            "action": action,
+            "order": order,
+        }
+        if price is not None:
+            request["price"] = price
+        if stop_loss is not None:
+            request["sl"] = stop_loss
+        if take_profit is not None:
+            request["tp"] = take_profit
+        return request
+
+    def _order_type_for_pending(self, order_type: str) -> int:
+        mapping = {
+            "buy_limit": self._adapter.order_type_buy_limit,
+            "sell_limit": self._adapter.order_type_sell_limit,
+            "buy_stop": self._adapter.order_type_buy_stop,
+            "sell_stop": self._adapter.order_type_sell_stop,
+        }
+        lower = order_type.lower()
+        if lower not in mapping:
+            raise TradingError(
+                f"unsupported order_type: {order_type!r}. "
+                f"Expected one of: {list(mapping)}"
+            )
+        return mapping[lower]
 
     def _ensure_idempotency_key(self, idempotency_key: str) -> None:
         if not idempotency_key.strip():

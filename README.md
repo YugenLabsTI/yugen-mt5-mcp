@@ -58,7 +58,20 @@ client, must reach the Windows-hosted server over a network boundary.
    `YUGEN_MT5_ALLOW_REAL_ACCOUNTS="true"` is only for real accounts. Demo
    accounts do not need it.
 
-5. Start the stdio MCP server:
+5. (Optional) Tune the risk limits. Both default to `1.0` when unset:
+
+   ```powershell
+   $env:YUGEN_MT5_MAX_ORDER_VOLUME="2.0"       # max volume of a single order
+   $env:YUGEN_MT5_MAX_SYMBOL_EXPOSURE="5.0"    # max cumulative volume per symbol
+   ```
+
+   `max_order_volume` caps one order; `max_symbol_exposure` caps the total
+   open volume across all positions in the same symbol. Set either to
+   `unlimited` (or a negative number) to disable that gate — this prints a
+   warning at startup so the relaxed limit stays visible. An unparsable value
+   stops startup with a clear error instead of silently defaulting.
+
+6. Start the stdio MCP server:
 
    ```powershell
    python -m yugen_mt5_mcp
@@ -91,6 +104,8 @@ directory:
         "YUGEN_MT5_ALLOWED_SYMBOLS": "Boom 1000 Index",
         "YUGEN_MT5_ALLOW_LIVE_TRADING": "true",
         "YUGEN_MT5_ALLOW_REAL_ACCOUNTS": "false",
+        "YUGEN_MT5_MAX_ORDER_VOLUME": "2.0",
+        "YUGEN_MT5_MAX_SYMBOL_EXPOSURE": "5.0",
         "YUGEN_MT5_AUDIT_PATH": "C:\\Users\\sgg10\\AppData\\Local\\Yugen\\mt5-mcp\\audit.sqlite3"
       }
     }
@@ -126,7 +141,7 @@ Keep the MCP process on a loopback or private bind. Caddy is the public edge; th
 | Real-account acknowledgement | Required only for the current server/agent session. |
 | Restart semantics | Any server or agent restart clears the acknowledgement. |
 | Allowed symbols / account modes | Enforced before MT5 calls. |
-| Volume / exposure limits | Checked before order submission. |
+| Volume / exposure limits | Checked before order submission. Configurable via `YUGEN_MT5_MAX_ORDER_VOLUME` / `YUGEN_MT5_MAX_SYMBOL_EXPOSURE` (default `1.0`; `unlimited` disables with a startup warning). |
 | Audit trail | SQLite append-only events with token/secret redaction. |
 
 ## Demo smoke controls

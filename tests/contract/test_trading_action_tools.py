@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 
-from tests.fakes.fake_mt5 import FakeMT5Backend
+from tests.fakes.fake_mt5 import FakeMT5Backend, FakeMT5Symbol, FakeMT5Tick
 from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.config import AppConfig, RiskConfig
 from yugen_mt5_mcp.market_data import MarketDataService
@@ -49,6 +49,7 @@ BULK_TOOL_NAMES = (
 def _build_server(
     tmp_path: Path,
     *,
+    allowed_symbols: tuple[str, ...] = ("EURUSD",),
     allow_live_trading: bool = True,
     allow_real_accounts: bool = True,
     real_account_consent_env: bool = False,
@@ -58,7 +59,7 @@ def _build_server(
     audit_store = AuditStore(tmp_path / "audit.sqlite3")
     config = AppConfig(
         risk=RiskConfig(
-            allowed_symbols=("EURUSD",),
+            allowed_symbols=allowed_symbols,
             allow_live_trading=allow_live_trading,
             allow_real_accounts=allow_real_accounts,
             real_account_consent_env=real_account_consent_env,
@@ -195,6 +196,86 @@ def test_place_market_order_happy_path(tmp_path: Path) -> None:
         "applied_sl", "applied_tp", "deviation",
     ):
         assert field in payload, f"Missing field: {field!r}"
+
+
+def test_place_market_order_preserves_broker_symbol_casing(tmp_path: Path) -> None:
+    server, backend, session_store, _ = _build_server(
+        tmp_path,
+        allowed_symbols=("Boom 1000 Index",),
+    )
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=14057.38,
+        ask=14058.51,
+        last=14058.00,
+        volume=10,
+        time=1_700_000_000,
+    )
+
+    async def call() -> dict[str, object]:
+        from fastmcp.client import Client
+
+        async with Client(server) as client:  # type: ignore[arg-type]
+            result = await client.call_tool(
+                "place_market_order",
+                {
+                    "session_id": "s1",
+                    "idempotency_key": "k-boom-1",
+                    "symbol": "Boom 1000 Index",
+                    "side": "buy",
+                    "volume": "0.2",
+                },
+            )
+            return cast(dict[str, object], result.data)
+
+    payload = asyncio.run(call())
+
+    assert payload["symbol"] == "Boom 1000 Index"
+    assert backend.selected_symbols[-1] == "Boom 1000 Index"
+
+
+def test_place_market_order_uses_allowed_symbol_casing_for_mt5_calls(
+    tmp_path: Path,
+) -> None:
+    server, backend, session_store, _ = _build_server(
+        tmp_path,
+        allowed_symbols=("Boom 1000 Index",),
+    )
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=14057.38,
+        ask=14058.51,
+        last=14058.00,
+        volume=10,
+        time=1_700_000_000,
+    )
+
+    async def call() -> dict[str, object]:
+        from fastmcp.client import Client
+
+        async with Client(server) as client:  # type: ignore[arg-type]
+            result = await client.call_tool(
+                "place_market_order",
+                {
+                    "session_id": "s1",
+                    "idempotency_key": "k-boom-2",
+                    "symbol": "boom 1000 index",
+                    "side": "buy",
+                    "volume": "0.2",
+                },
+            )
+            return cast(dict[str, object], result.data)
+
+    payload = asyncio.run(call())
+
+    assert payload["symbol"] == "Boom 1000 Index"
+    assert backend.selected_symbols[-1] == "Boom 1000 Index"
 
 
 # --- WU10-T4: place_market_order rejected when live_trading disabled ---

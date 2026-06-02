@@ -90,6 +90,7 @@ def build_runtime(
         audit_store=audit_store,
         adapter=adapter,
         read_tool_names=READ_ONLY_TOOL_NAMES,
+        entrypoint_warnings=warnings,
     )
     factory = _create_default_server if server_factory is None else server_factory
     server = factory(market_data, doctor_service)

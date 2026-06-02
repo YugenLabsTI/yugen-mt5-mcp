@@ -281,8 +281,10 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
         "mt5_account",
         "read_tools",
         "runtime_context",
+        "real_account_consent",
     ]
-    assert checks[-1]["details"] == {
+    runtime_ctx = next(c for c in checks if c["name"] == "runtime_context")
+    assert runtime_ctx["details"] == {
         "transport_mode": "stdio",
         "remote_enabled": False,
         "allowed_symbols": ["EURUSD"],

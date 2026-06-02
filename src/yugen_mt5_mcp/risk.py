@@ -95,14 +95,21 @@ class RiskPolicy:
         self._audit(request_id, request.actor, request.action, "allowed", request, {})
         return approval
 
+    def resolve_symbol(self, symbol: str) -> str:
+        """Return the configured canonical symbol casing for a trading request."""
+        return self._validate_symbol(symbol)
+
     def _validate_symbol(self, symbol: str) -> str:
-        normalized = symbol.strip().upper()
-        if not normalized:
+        requested = symbol.strip()
+        if not requested:
             raise RiskPolicyError("symbol is required")
         allowed_symbols = self._config.risk.allowed_symbols
-        if allowed_symbols and normalized not in allowed_symbols:
-            raise RiskPolicyError(f"symbol is not allowed: {normalized}")
-        return normalized
+        if allowed_symbols:
+            for allowed_symbol in allowed_symbols:
+                if requested.casefold() == allowed_symbol.casefold():
+                    return allowed_symbol
+            raise RiskPolicyError(f"symbol is not allowed: {requested}")
+        return requested
 
     def _validate_live_trading(self, account: AccountSnapshot) -> None:
         if not self._config.risk.allow_live_trading:

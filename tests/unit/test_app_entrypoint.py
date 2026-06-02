@@ -78,8 +78,15 @@ def test_build_runtime_injected_server_factory_receives_market_data_and_doctor_s
         created_configs.append(market_data._config)
         assert market_data._audit_store.database_path == tmp_path / "audit.sqlite3"
         assert doctor_service.run().status is DoctorStatus.OK
-        assert doctor_service.run().checks[-1].details == {
+        checks = {check.name: check for check in doctor_service.run().checks}
+        assert checks["read_tools"].details == {
             "registered": list(READ_ONLY_TOOL_NAMES)
+        }
+        assert checks["runtime_context"].details == {
+            "transport_mode": "stdio",
+            "remote_enabled": False,
+            "allowed_symbols": ["EURUSD"],
+            "warnings": [],
         }
         return FakeServer()
 
@@ -112,12 +119,14 @@ def test_build_runtime_default_factory_wires_doctor_dependencies(
         audit_store: AuditStore,
         adapter: object,
         read_tool_names: tuple[str, ...],
+        entrypoint_warnings: tuple[EntrypointWarning, ...],
     ) -> object:
         nonlocal captured_config, captured_audit_store, captured_read_tool_names
         captured_config = config
         captured_audit_store = audit_store
         captured_read_tool_names = read_tool_names
         assert isinstance(adapter, MT5Adapter)
+        assert entrypoint_warnings == ()
         return fake_doctor
 
     def fake_create_server(
@@ -148,6 +157,50 @@ def test_build_runtime_default_factory_wires_doctor_dependencies(
     assert captured_read_tool_names == READ_ONLY_TOOL_NAMES
     assert captured_doctor_service is fake_doctor
     assert captured_market_data.get_tick(symbol="EURUSD").symbol == "EURUSD"
+
+
+def test_build_runtime_passes_wildcard_warning_into_doctor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_warnings: tuple[EntrypointWarning, ...] | None = None
+
+    def fake_create_default_doctor(
+        *,
+        config: AppConfig,
+        audit_store: AuditStore,
+        adapter: object,
+        read_tool_names: tuple[str, ...],
+        entrypoint_warnings: tuple[EntrypointWarning, ...],
+    ) -> object:
+        nonlocal captured_warnings
+        assert isinstance(config, AppConfig)
+        assert isinstance(audit_store, AuditStore)
+        assert isinstance(adapter, MT5Adapter)
+        assert read_tool_names == READ_ONLY_TOOL_NAMES
+        captured_warnings = entrypoint_warnings
+        return object()
+
+    monkeypatch.setattr(app_module, "create_default_doctor", fake_create_default_doctor)
+    monkeypatch.setattr(
+        app_module,
+        "create_server",
+        lambda market_data, doctor_service=None: FakeServer(),
+    )
+
+    runtime = build_runtime(
+        env={ALLOWED_SYMBOLS_ENV: "*"},
+        audit_path=tmp_path / "audit.sqlite3",
+        adapter_factory=lambda: MT5Adapter(backend=FakeMT5Backend()),
+    )
+
+    assert runtime.warnings == (
+        EntrypointWarning(
+            code="allowed_symbols_wildcard",
+            message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+        ),
+    )
+    assert captured_warnings == runtime.warnings
 
 
 def test_resolve_audit_path_uses_absolute_env_value() -> None:

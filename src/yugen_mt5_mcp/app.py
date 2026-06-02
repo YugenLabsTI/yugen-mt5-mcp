@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, TextIO
 
 from .audit import AuditStore
+from .chart_bridge import ChartBridgeConfig
 from .config import AppConfig, AuditConfig, ConfigError, RiskConfig
 from .doctor import DoctorService, create_default_doctor
 from .market_data import MarketDataService
@@ -29,6 +30,13 @@ MAX_SYMBOL_EXPOSURE_ENV = "YUGEN_MT5_MAX_SYMBOL_EXPOSURE"
 MAX_ORDER_VOLUME_ENV = "YUGEN_MT5_MAX_ORDER_VOLUME"
 DEFAULT_AUDIT_PATH = Path("var/audit.sqlite3")
 DEFAULT_RISK_LIMIT = Decimal("1.0")
+
+# Chart bridge env vars
+CHART_SHARED_SECRET_ENV = "YUGEN_MT5_CHART_SHARED_SECRET"
+CHART_PIPE_NAME_ENV = "YUGEN_MT5_CHART_PIPE_NAME"
+CHART_TIMEOUT_ENV = "YUGEN_MT5_CHART_TIMEOUT_SECONDS"
+_DEFAULT_CHART_PIPE_NAME = "yugen_chart_bridge"
+_DEFAULT_CHART_TIMEOUT = 1.0
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _UNLIMITED_TOKENS = frozenset({"unlimited"})
@@ -139,6 +147,51 @@ def _unlimited_warning(key: str) -> EntrypointWarning:
     )
 
 
+def parse_chart_bridge_config(
+    env: Mapping[str, str],
+) -> ChartBridgeConfig | None:
+    """Parse chart bridge configuration from the environment.
+
+    Returns ``None`` when ``YUGEN_MT5_CHART_SHARED_SECRET`` is unset or blank —
+    the bridge is disabled and no chart tools are registered.
+
+    When the secret is present, parses pipe_name and timeout_seconds (mirroring
+    the parse_risk_limit fail-loud pattern), then returns a validated
+    ``ChartBridgeConfig``.
+
+    Raises:
+        ConfigError: when timeout_seconds is set but non-positive or unparsable.
+    """
+    raw_secret = env.get(CHART_SHARED_SECRET_ENV, "").strip()
+    if not raw_secret:
+        return None
+
+    pipe_name = env.get(CHART_PIPE_NAME_ENV, "").strip() or _DEFAULT_CHART_PIPE_NAME
+
+    raw_timeout = env.get(CHART_TIMEOUT_ENV, "").strip()
+    if raw_timeout:
+        try:
+            timeout_seconds = float(raw_timeout)
+        except ValueError as error:
+            raise ConfigError(
+                f"{CHART_TIMEOUT_ENV} (chart bridge timeout) must be a positive number; "
+                f"got {raw_timeout!r}"
+            ) from error
+        if timeout_seconds <= 0:
+            raise ConfigError(
+                f"{CHART_TIMEOUT_ENV} (chart bridge timeout) must be a positive number; "
+                f"got {raw_timeout!r}"
+            )
+    else:
+        timeout_seconds = _DEFAULT_CHART_TIMEOUT
+
+    return ChartBridgeConfig(
+        pipe_name=pipe_name,
+        shared_secret=raw_secret,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def build_runtime(
     *,
     env: Mapping[str, str] | None = None,
@@ -159,6 +212,14 @@ def build_runtime(
         runtime_env, MAX_ORDER_VOLUME_ENV, default=DEFAULT_RISK_LIMIT
     )
     warnings += tuple(w for w in (exposure_warning, order_volume_warning) if w is not None)
+
+    # Chart bridge — disabled when YUGEN_MT5_CHART_SHARED_SECRET is not set.
+    # Disabled is the normal default state for this opt-in feature; no warning is
+    # emitted. parse_chart_bridge_config raises ConfigError at startup for invalid
+    # timeout when the secret IS set. Slice C2 will consume this config to wire
+    # ChartBridgeClient into create_server.
+    _chart_bridge_config = parse_chart_bridge_config(runtime_env)
+
     config = AppConfig(
         audit=AuditConfig(database_path=resolved_audit_path),
         risk=RiskConfig(

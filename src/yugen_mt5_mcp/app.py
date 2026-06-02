@@ -6,11 +6,12 @@ import os
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal, Protocol, TextIO
 
 from .audit import AuditStore
-from .config import AppConfig, AuditConfig, RiskConfig
+from .config import AppConfig, AuditConfig, ConfigError, RiskConfig
 from .doctor import DoctorService, create_default_doctor
 from .market_data import MarketDataService
 from .mt5_adapter import MT5Adapter
@@ -24,9 +25,13 @@ AUDIT_PATH_ENV = "YUGEN_MT5_AUDIT_PATH"
 CONSENT_ENV = "YUGEN_MT5_REAL_ACCOUNT_CONSENT"
 ALLOW_LIVE_TRADING_ENV = "YUGEN_MT5_ALLOW_LIVE_TRADING"
 ALLOW_REAL_ACCOUNTS_ENV = "YUGEN_MT5_ALLOW_REAL_ACCOUNTS"
+MAX_SYMBOL_EXPOSURE_ENV = "YUGEN_MT5_MAX_SYMBOL_EXPOSURE"
+MAX_ORDER_VOLUME_ENV = "YUGEN_MT5_MAX_ORDER_VOLUME"
 DEFAULT_AUDIT_PATH = Path("var/audit.sqlite3")
+DEFAULT_RISK_LIMIT = Decimal("1.0")
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+_UNLIMITED_TOKENS = frozenset({"unlimited"})
 
 
 class RunnableServer(Protocol):
@@ -86,6 +91,54 @@ def _parse_true_false_env(env: Mapping[str, str], key: str) -> bool:
     return env.get(key, "").strip().lower() == "true"
 
 
+def parse_risk_limit(
+    env: Mapping[str, str],
+    key: str,
+    *,
+    default: Decimal,
+) -> tuple[Decimal | None, EntrypointWarning | None]:
+    """Parse a numeric risk-limit env var.
+
+    Returns ``(limit, warning)`` where ``limit`` is ``None`` when the gate is
+    disabled. Unset/blank falls back to ``default``. ``"unlimited"`` or any
+    finite negative number disables the limit and emits a transparency warning.
+    A finite positive number is the limit. Anything else — ``0``, ``nan``,
+    ``inf``, ``"none"``, or unparsable text — raises ``ConfigError`` so the
+    misconfiguration surfaces at startup instead of silently defaulting or
+    disabling a safety gate.
+    """
+    raw_value = env.get(key, "").strip()
+    if not raw_value:
+        return default, None
+    if raw_value.lower() in _UNLIMITED_TOKENS:
+        return None, _unlimited_warning(key)
+    try:
+        value = Decimal(raw_value)
+    except InvalidOperation as error:
+        raise ConfigError(_limit_error(key, raw_value)) from error
+    if not value.is_finite():
+        raise ConfigError(_limit_error(key, raw_value))
+    if value < 0:
+        return None, _unlimited_warning(key)
+    if value == 0:
+        raise ConfigError(_limit_error(key, raw_value))
+    return value, None
+
+
+def _limit_error(key: str, raw_value: str) -> str:
+    return (
+        f"{key} must be a positive number, 'unlimited', or a negative number to "
+        f"disable the limit; got {raw_value!r}"
+    )
+
+
+def _unlimited_warning(key: str) -> EntrypointWarning:
+    return EntrypointWarning(
+        code="risk_limit_unlimited",
+        message=f"{key}=unlimited removes the configured risk limit",
+    )
+
+
 def build_runtime(
     *,
     env: Mapping[str, str] | None = None,
@@ -99,6 +152,13 @@ def build_runtime(
     real_account_consent_env = _parse_consent_env(runtime_env)
     allow_live_trading = _parse_true_false_env(runtime_env, ALLOW_LIVE_TRADING_ENV)
     allow_real_accounts = _parse_true_false_env(runtime_env, ALLOW_REAL_ACCOUNTS_ENV)
+    max_symbol_exposure, exposure_warning = parse_risk_limit(
+        runtime_env, MAX_SYMBOL_EXPOSURE_ENV, default=DEFAULT_RISK_LIMIT
+    )
+    max_order_volume, order_volume_warning = parse_risk_limit(
+        runtime_env, MAX_ORDER_VOLUME_ENV, default=DEFAULT_RISK_LIMIT
+    )
+    warnings += tuple(w for w in (exposure_warning, order_volume_warning) if w is not None)
     config = AppConfig(
         audit=AuditConfig(database_path=resolved_audit_path),
         risk=RiskConfig(
@@ -106,6 +166,8 @@ def build_runtime(
             allow_live_trading=allow_live_trading,
             allow_real_accounts=allow_real_accounts,
             real_account_consent_env=real_account_consent_env,
+            max_symbol_exposure=max_symbol_exposure,
+            max_order_volume=max_order_volume,
         ),
     )
     adapter = adapter_factory()

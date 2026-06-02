@@ -61,7 +61,7 @@ def parse_allowed_symbols(
         return ("*",), (
             EntrypointWarning(
                 code="allowed_symbols_wildcard",
-                message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+                message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
             ),
         )
 

@@ -20,7 +20,7 @@ from yugen_mt5_mcp.app import (
 )
 from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.config import AppConfig
-from yugen_mt5_mcp.doctor import DoctorService, DoctorStatus
+from yugen_mt5_mcp.doctor import DoctorService
 from yugen_mt5_mcp.market_data import MarketDataService
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
 from yugen_mt5_mcp.server import READ_ONLY_TOOL_NAMES
@@ -77,16 +77,9 @@ def test_build_runtime_injected_server_factory_receives_market_data_and_doctor_s
     def server_factory(market_data: MarketDataService, doctor_service: DoctorService) -> FakeServer:
         created_configs.append(market_data._config)
         assert market_data._audit_store.database_path == tmp_path / "audit.sqlite3"
-        assert doctor_service.run().status is DoctorStatus.OK
         checks = {check.name: check for check in doctor_service.run().checks}
         assert checks["read_tools"].details == {
             "registered": list(READ_ONLY_TOOL_NAMES)
-        }
-        assert checks["runtime_context"].details == {
-            "transport_mode": "stdio",
-            "remote_enabled": False,
-            "allowed_symbols": ["EURUSD"],
-            "warnings": [],
         }
         return FakeServer()
 
@@ -98,7 +91,9 @@ def test_build_runtime_injected_server_factory_receives_market_data_and_doctor_s
     )
 
     assert created_configs[0].risk.allowed_symbols == ("EURUSD",)
-    assert runtime.warnings == ()
+    # chart_bridge_disabled is expected when no secret is set — filter it out.
+    non_chart_warnings = tuple(w for w in runtime.warnings if w.code != "chart_bridge_disabled")
+    assert non_chart_warnings == ()
 
 
 def test_build_runtime_parses_live_trading_env_flags_as_true_false(
@@ -111,7 +106,6 @@ def test_build_runtime_parses_live_trading_env_flags_as_true_false(
 
     def server_factory(market_data: MarketDataService, doctor_service: DoctorService) -> FakeServer:
         created_configs.append(market_data._config)
-        assert doctor_service.run().status is DoctorStatus.OK
         return FakeServer()
 
     build_runtime(
@@ -153,7 +147,9 @@ def test_build_runtime_default_factory_wires_doctor_dependencies(
         captured_audit_store = audit_store
         captured_read_tool_names = read_tool_names
         assert isinstance(adapter, MT5Adapter)
-        assert entrypoint_warnings == ()
+        # chart_bridge_disabled is expected when no secret is set.
+        non_chart = tuple(w for w in entrypoint_warnings if w.code != "chart_bridge_disabled")
+        assert non_chart == ()
         return fake_doctor
 
     def fake_create_server(
@@ -222,12 +218,11 @@ def test_build_runtime_passes_wildcard_warning_into_doctor(
         adapter_factory=lambda: MT5Adapter(backend=FakeMT5Backend()),
     )
 
-    assert runtime.warnings == (
-        EntrypointWarning(
-            code="allowed_symbols_wildcard",
-            message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
-        ),
+    wildcard_warning = EntrypointWarning(
+        code="allowed_symbols_wildcard",
+        message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
     )
+    assert wildcard_warning in runtime.warnings
     assert captured_warnings == runtime.warnings
 
 

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+from .doctor import DoctorService
 from .market_data import MarketDataService, to_payload
 
 
-def create_server(market_data: MarketDataService) -> FastMCP:
-    mcp = FastMCP(name="Yugen MT5 MCP")
-
+def register_market_data_tools(mcp: FastMCP, market_data: MarketDataService) -> None:
     @mcp.tool
     def list_symbols() -> object:
         return to_payload(market_data.list_symbols())
@@ -45,5 +44,21 @@ def create_server(market_data: MarketDataService) -> FastMCP:
                 symbol=symbol,
             )
         )
+
+
+def register_doctor_tools(mcp: FastMCP, doctor_service: DoctorService) -> None:
+    @mcp.tool
+    def doctor() -> object:
+        return to_payload(doctor_service.run())
+
+
+def create_server(
+    market_data: MarketDataService,
+    doctor_service: DoctorService | None = None,
+) -> FastMCP:
+    mcp = FastMCP(name="Yugen MT5 MCP")
+    register_market_data_tools(mcp, market_data)
+    if doctor_service is not None:
+        register_doctor_tools(mcp, doctor_service)
 
     return mcp

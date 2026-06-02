@@ -1,15 +1,17 @@
+"""Contract tests for the chart bridge protocol — transport-agnostic.
+
+Uses FakeTransport to run all contract scenarios on Linux CI without Windows / MT5.
+"""
+
 from __future__ import annotations
 
 import json
-import socketserver
-import threading
-import time
-from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
+from tests.fakes.fake_transport import FakeTransport
 from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.chart_bridge import (
     SCHEMA_VERSION,
@@ -23,185 +25,188 @@ from yugen_mt5_mcp.chart_bridge import (
     build_auth_tag,
 )
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-class ProtocolTCPServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
+def _make_response(**fields: Any) -> bytes:
+    return (json.dumps(fields) + "\n").encode("utf-8")
 
 
-def build_client(tmp_path: Path, *, port: int, timeout_seconds: float = 0.2) -> ChartBridgeClient:
+def build_fake_client(
+    tmp_path: Path,
+    fake_transport: FakeTransport,
+    *,
+    pipe_name: str = "test_pipe",
+    shared_secret: str = "super-secret",
+    timeout_seconds: float = 1.0,
+) -> ChartBridgeClient:
     return ChartBridgeClient(
         config=ChartBridgeConfig(
-            host="127.0.0.1",
-            port=port,
-            shared_secret="super-secret",
+            pipe_name=pipe_name,
+            shared_secret=shared_secret,
             timeout_seconds=timeout_seconds,
         ),
+        transport=fake_transport,
         audit_store=AuditStore(tmp_path / "audit.sqlite3"),
     )
 
 
-def run_server(
-    handler: Callable[[dict[str, Any]], Mapping[str, object] | None],
-) -> tuple[ProtocolTCPServer, threading.Thread]:
-    class RequestHandler(socketserver.StreamRequestHandler):
-        def handle(self) -> None:
-            raw_line = self.rfile.readline()
-            payload = cast(dict[str, Any], json.loads(raw_line.decode("utf-8")))
-            response = handler(payload)
-            if response is None:
-                return
-            self.wfile.write((json.dumps(dict(response)) + "\n").encode("utf-8"))
+# ---------------------------------------------------------------------------
+# Config validation (formerly socket-based)
+# ---------------------------------------------------------------------------
 
-    server = ProtocolTCPServer(("127.0.0.1", 0), RequestHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server, thread
-
-
-def test_chart_bridge_rejects_non_loopback_host(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="loopback"):
+def test_chart_bridge_rejects_empty_pipe_name(tmp_path: Path) -> None:
+    """ChartBridgeConfig.validate() must reject an empty pipe_name."""
+    with pytest.raises(ValueError, match="pipe_name"):
         ChartBridgeClient(
-            config=ChartBridgeConfig(host="192.168.1.5", port=18888, shared_secret="secret"),
+            config=ChartBridgeConfig(pipe_name="", shared_secret="secret"),
+            transport=FakeTransport(response=b""),
             audit_store=AuditStore(tmp_path / "audit.sqlite3"),
         )
 
 
-def test_list_charts_returns_discovery_payload(tmp_path: Path) -> None:
-    captured_request: dict[str, Any] = {}
+# ---------------------------------------------------------------------------
+# list_charts
+# ---------------------------------------------------------------------------
 
-    def handler(payload: dict[str, Any]) -> Mapping[str, object]:
-        captured_request.update(payload)
-        return {
-            "request_id": payload["request_id"],
-            "action": payload["action"],
-            "status": "ok",
-            "verified": True,
-            "charts": [
+def test_list_charts_returns_discovery_payload(tmp_path: Path) -> None:
+    """list_charts sends the correct envelope and returns chart descriptors."""
+    fake = FakeTransport(
+        response=_make_response(
+            request_id="will-be-replaced",
+            action="list_charts",
+            status="ok",
+            verified=True,
+            charts=[
                 {"chart_id": 11, "symbol": "EURUSD", "timeframe": "M1"},
                 {"chart_id": 12, "symbol": "XAUUSD", "timeframe": "H1"},
             ],
-        }
-
-    server, thread = run_server(handler)
-    try:
-        client = build_client(tmp_path, port=server.server_address[1])
-
-        charts = client.list_charts()
-
-        assert [chart.chart_id for chart in charts] == [11, 12]
-        assert captured_request["schema_version"] == SCHEMA_VERSION
-        assert captured_request["action"] == "list_charts"
-        assert captured_request["auth_tag"] == build_auth_tag(
-            shared_secret="super-secret",
-            schema_version=SCHEMA_VERSION,
-            request_id=str(captured_request["request_id"]),
-            action="list_charts",
-            idempotency_key=str(captured_request["idempotency_key"]),
         )
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1)
+    )
+    client = build_fake_client(tmp_path, fake)
 
+    charts = client.list_charts()
+
+    # Verify the request payload
+    request = json.loads(fake.last_request.decode("utf-8"))
+    assert request["schema_version"] == SCHEMA_VERSION
+    assert request["action"] == "list_charts"
+    assert request["auth_tag"] == build_auth_tag(
+        shared_secret="super-secret",
+        schema_version=SCHEMA_VERSION,
+        request_id=request["request_id"],
+        action="list_charts",
+        idempotency_key=request["idempotency_key"],
+    )
+    # Verify the parsed result
+    assert [c.chart_id for c in charts] == [11, 12]
+    assert charts[0].symbol == "EURUSD"
+
+
+# ---------------------------------------------------------------------------
+# create_object — happy path
+# ---------------------------------------------------------------------------
 
 def test_create_object_requires_verified_ack_and_targets_chart(tmp_path: Path) -> None:
-    captured_request: dict[str, Any] = {}
+    """create_object sends the correct chart_selector and object payload."""
+    # FakeTransport must echo back the request_id and action from the request.
+    # We use a callable-style fake that reads from the request.
+    sent_requests: list[bytes] = []
 
-    def handler(payload: dict[str, Any]) -> Mapping[str, object]:
-        captured_request.update(payload)
-        return {
-            "request_id": payload["request_id"],
-            "action": payload["action"],
-            "status": "ok",
-            "verified": True,
-            "observed_properties": {
-                "name": "supply-zone",
-                "color": "red",
-            },
-        }
+    class EchoFakeTransport(FakeTransport):
+        def exchange(self, request_line: bytes, *, timeout_seconds: float) -> bytes:
+            sent_requests.append(request_line)
+            req = json.loads(request_line.decode("utf-8"))
+            return _make_response(
+                request_id=req["request_id"],
+                action=req["action"],
+                status="ok",
+                verified=True,
+                observed_properties={"name": "supply-zone", "color": "red"},
+            )
 
-    server, thread = run_server(handler)
-    try:
-        client = build_client(tmp_path, port=server.server_address[1])
+    fake = EchoFakeTransport(response=b"")
+    client = build_fake_client(tmp_path, fake)
 
-        ack = client.create_object(
-            chart=ChartSelector(chart_id=77, symbol="eurusd", timeframe="m5"),
-            object_spec=ChartObjectSpec(
-                name="supply-zone",
-                object_type="trend",
-                properties={"color": "red"},
-                points=(
-                    ChartObjectPoint(index=0, price=1.101),
-                    ChartObjectPoint(index=1, price=1.103),
-                ),
+    ack = client.create_object(
+        chart=ChartSelector(chart_id=77, symbol="eurusd", timeframe="m5"),
+        object_spec=ChartObjectSpec(
+            name="supply-zone",
+            object_type="trend",
+            properties={"color": "red"},
+            points=(
+                ChartObjectPoint(index=0, price=1.101),
+                ChartObjectPoint(index=1, price=1.103),
             ),
-        )
+        ),
+    )
 
-        assert ack.verified is True
-        assert captured_request["chart_selector"] == {
-            "chart_id": 77,
-            "symbol": "EURUSD",
-            "timeframe": "M5",
-        }
-        assert captured_request["object"] == {
-            "name": "supply-zone",
-            "object_type": "TREND",
-            "properties": {"color": "red"},
-            "points": [
-                {"index": 0, "price": 1.101},
-                {"index": 1, "price": 1.103},
-            ],
-        }
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1)
+    assert ack.verified is True
+    request = json.loads(sent_requests[0].decode("utf-8"))
+    assert request["chart_selector"] == {
+        "chart_id": 77,
+        "symbol": "EURUSD",
+        "timeframe": "M5",
+    }
+    assert request["object"] == {
+        "name": "supply-zone",
+        "object_type": "TREND",
+        "properties": {"color": "red"},
+        "points": [
+            {"index": 0, "price": 1.101},
+            {"index": 1, "price": 1.103},
+        ],
+    }
 
+
+# ---------------------------------------------------------------------------
+# create_object — unverified ACK
+# ---------------------------------------------------------------------------
 
 def test_create_object_rejects_unverified_ack(tmp_path: Path) -> None:
-    def handler(payload: dict[str, Any]) -> Mapping[str, object]:
-        return {
-            "request_id": payload["request_id"],
-            "action": payload["action"],
-            "status": "ok",
-            "verified": False,
-        }
+    """Client must raise ChartBridgeProtocolError when ACK has verified=False."""
+    sent_requests: list[bytes] = []
 
-    server, thread = run_server(handler)
-    try:
-        client = build_client(tmp_path, port=server.server_address[1])
-
-        with pytest.raises(ChartBridgeProtocolError, match="not verified"):
-            client.create_object(
-                chart=ChartSelector(chart_id=77),
-                object_spec=ChartObjectSpec(name="entry", object_type="HLINE"),
+    class UnverifiedFakeTransport(FakeTransport):
+        def exchange(self, request_line: bytes, *, timeout_seconds: float) -> bytes:
+            sent_requests.append(request_line)
+            req = json.loads(request_line.decode("utf-8"))
+            return _make_response(
+                request_id=req["request_id"],
+                action=req["action"],
+                status="ok",
+                verified=False,
             )
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1)
 
+    fake = UnverifiedFakeTransport(response=b"")
+    client = build_fake_client(tmp_path, fake)
+
+    with pytest.raises(ChartBridgeProtocolError, match="not verified"):
+        client.create_object(
+            chart=ChartSelector(chart_id=77),
+            object_spec=ChartObjectSpec(name="entry", object_type="HLINE"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# create_object — timeout
+# ---------------------------------------------------------------------------
 
 def test_create_object_times_out_when_service_does_not_reply(tmp_path: Path) -> None:
-    def handler(payload: dict[str, Any]) -> None:
-        del payload
-        time.sleep(0.3)
-        return None
+    """Client must raise ChartBridgeTimeoutError (from transport) and audit as rejected."""
+    fake = FakeTransport(
+        response=b"irrelevant",
+        raises=ChartBridgeTimeoutError("chart bridge request timed out"),
+    )
+    client = build_fake_client(tmp_path, fake, timeout_seconds=0.05)
 
-    server, thread = run_server(handler)
-    try:
-        client = build_client(tmp_path, port=server.server_address[1], timeout_seconds=0.05)
+    with pytest.raises(ChartBridgeTimeoutError, match="timed out"):
+        client.create_object(
+            chart=ChartSelector(symbol="EURUSD"),
+            object_spec=ChartObjectSpec(name="timeout", object_type="TEXT"),
+        )
 
-        with pytest.raises(ChartBridgeTimeoutError, match="timed out"):
-            client.create_object(
-                chart=ChartSelector(symbol="EURUSD"),
-                object_spec=ChartObjectSpec(name="timeout", object_type="TEXT"),
-            )
-
-        rows = AuditStore(tmp_path / "audit.sqlite3").fetch_all()
-        assert rows[-1]["event_type"] == "chart_bridge.create_object"
-        assert rows[-1]["decision"] == "rejected"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1)
+    rows = AuditStore(tmp_path / "audit.sqlite3").fetch_all()
+    assert rows[-1]["event_type"] == "chart_bridge.create_object"
+    assert rows[-1]["decision"] == "rejected"

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, TextIO
 
 from .audit import AuditStore
-from .chart_bridge import ChartBridgeConfig
+from .chart_bridge import ChartBridgeClient, ChartBridgeConfig
 from .config import AppConfig, AuditConfig, ConfigError, RiskConfig
 from .doctor import DoctorService, create_default_doctor
 from .market_data import MarketDataService
@@ -213,12 +213,9 @@ def build_runtime(
     )
     warnings += tuple(w for w in (exposure_warning, order_volume_warning) if w is not None)
 
-    # Chart bridge — disabled when YUGEN_MT5_CHART_SHARED_SECRET is not set.
-    # Disabled is the normal default state for this opt-in feature; no warning is
-    # emitted. parse_chart_bridge_config raises ConfigError at startup for invalid
-    # timeout when the secret IS set. Slice C2 will consume this config to wire
-    # ChartBridgeClient into create_server.
-    _chart_bridge_config = parse_chart_bridge_config(runtime_env)
+    # Chart bridge config parsed early (fail-loud on invalid timeout when secret is set).
+    # Client construction deferred until after audit_store is created below.
+    chart_bridge_config = parse_chart_bridge_config(runtime_env)
 
     config = AppConfig(
         audit=AuditConfig(database_path=resolved_audit_path),
@@ -233,6 +230,20 @@ def build_runtime(
     )
     adapter = adapter_factory()
     audit_store = AuditStore(resolved_audit_path)
+
+    # Chart bridge client — disabled when YUGEN_MT5_CHART_SHARED_SECRET is not set.
+    # Disabled is the normal default state for this opt-in feature; no warning is emitted.
+    # On non-Windows platforms the real PipeTransport is unavailable; the client silently
+    # stays None so chart tools are not registered (MCP and trading remain fully operational).
+    chart_client: ChartBridgeClient | None = None
+    if chart_bridge_config is not None:
+        import sys as _sys
+
+        if _sys.platform == "win32":
+            chart_client = ChartBridgeClient(
+                config=chart_bridge_config,
+                audit_store=audit_store,
+            )
     market_data = MarketDataService(config=config, adapter=adapter, audit_store=audit_store)
     doctor_service = create_default_doctor(
         config=config,
@@ -264,6 +275,7 @@ def build_runtime(
             bulk_service=bulk_service,
             session_store=session_store,
             config=config,
+            chart_client=chart_client,
         )
     else:
         # Injected factories keep the existing (market_data, doctor_service) signature
@@ -299,6 +311,7 @@ def _create_default_server(
     bulk_service: BulkTradeService | None = None,
     session_store: SessionRiskStore | None = None,
     config: AppConfig | None = None,
+    chart_client: ChartBridgeClient | None = None,
 ) -> RunnableServer:
     return create_server(
         market_data,
@@ -307,4 +320,5 @@ def _create_default_server(
         bulk_service=bulk_service,
         session_store=session_store,
         config=config,
+        chart_client=chart_client,
     )

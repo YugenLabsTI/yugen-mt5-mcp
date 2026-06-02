@@ -33,6 +33,7 @@ class ChartBridgeAction(StrEnum):
     CREATE_OBJECT = "create_object"
     UPDATE_OBJECT = "update_object"
     DELETE_OBJECT = "delete_object"
+    CLEAR_OBJECTS = "clear_objects"
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +258,39 @@ class ChartBridgeClient:
             object_spec=object_spec,
             idempotency_key=idempotency_key,
         )
+
+    def clear_objects(self, *, symbol: str | None = None) -> dict[str, object]:
+        """Send a clear_objects action to remove all yugen_* objects.
+
+        The MQL5 Service filters by the ``yugen_`` prefix server-side. Returns
+        ``{"deleted_count": N, "status": "ok"}`` on success.
+        """
+        request_id = self._request_id()
+        payload = self._build_request(
+            action=ChartBridgeAction.CLEAR_OBJECTS,
+            request_id=request_id,
+        )
+        if symbol is not None:
+            payload = dict(payload)
+            payload["chart_selector"] = {"symbol": symbol.strip().upper()}
+        try:
+            response = self._round_trip(payload)
+            deleted_count = int(response.get("deleted_count", 0))
+        except ChartBridgeError as error:
+            self._audit(
+                "clear_objects",
+                request_id,
+                "rejected",
+                {"symbol": symbol, "error": str(error)},
+            )
+            raise
+        self._audit(
+            "clear_objects",
+            request_id,
+            "acknowledged",
+            {"symbol": symbol, "deleted_count": deleted_count},
+        )
+        return {"deleted_count": deleted_count, "status": "ok"}
 
     def delete_object(
         self,

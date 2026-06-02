@@ -19,6 +19,8 @@ class TradeAction(StrEnum):
     OPEN = "open"
     CLOSE = "close"
     MODIFY = "modify"
+    PLACE_PENDING = "place_pending"
+    CANCEL_PENDING = "cancel_pending"
 
 
 class RiskPolicyError(ValueError):

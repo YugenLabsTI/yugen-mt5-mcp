@@ -113,8 +113,15 @@ class FakeMT5Backend:
     ACCOUNT_TRADE_MODE_REAL = 2
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_SLTP = 6
+    TRADE_ACTION_PENDING = 5
+    TRADE_ACTION_REMOVE = 2
+    TRADE_ACTION_MODIFY = 8
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
+    ORDER_TYPE_BUY_LIMIT = 2
+    ORDER_TYPE_SELL_LIMIT = 3
+    ORDER_TYPE_BUY_STOP = 4
+    ORDER_TYPE_SELL_STOP = 5
     TRADE_RETCODE_DONE = 10009
     TRADE_RETCODE_DONE_PARTIAL = 10010
     TRADE_RETCODE_REJECT = 10013
@@ -314,7 +321,65 @@ class FakeMT5Backend:
         price = float(
             cast(float | int | str, request.get("price", self.order_send_result.price))
         )
-        result = FakeMT5TradeResult(
+
+        if self.order_send_result.retcode not in {
+            self.TRADE_RETCODE_DONE,
+            self.TRADE_RETCODE_DONE_PARTIAL,
+        }:
+            return FakeMT5TradeResult(
+                retcode=self.order_send_result.retcode,
+                comment=self.order_send_result.comment,
+                order=self.order_send_result.order,
+                deal=self.order_send_result.deal,
+                volume=volume,
+                price=price,
+            )
+
+        if action == self.TRADE_ACTION_DEAL:
+            self._apply_deal_request(request, volume)
+            return FakeMT5TradeResult(
+                retcode=self.order_send_result.retcode,
+                comment=self.order_send_result.comment,
+                order=self.order_send_result.order,
+                deal=self.order_send_result.deal,
+                volume=volume,
+                price=price,
+            )
+        if action == self.TRADE_ACTION_PENDING:
+            self._apply_pending_request(request, volume)
+            # order_send_result.order was set to the new ticket inside _apply_pending_request
+            return FakeMT5TradeResult(
+                retcode=self.order_send_result.retcode,
+                comment=self.order_send_result.comment,
+                order=self.order_send_result.order,
+                deal=0,
+                volume=volume,
+                price=price,
+            )
+        if action == self.TRADE_ACTION_REMOVE:
+            order_ticket = int(cast(int | float | str, request["order"]))
+            self._apply_remove_request(request)
+            return FakeMT5TradeResult(
+                retcode=self.TRADE_RETCODE_DONE,
+                comment="done",
+                order=order_ticket,
+                deal=0,
+                volume=0.0,
+                price=0.0,
+            )
+        if action == self.TRADE_ACTION_MODIFY:
+            order_ticket = int(cast(int | float | str, request["order"]))
+            self._apply_modify_request(request)
+            return FakeMT5TradeResult(
+                retcode=self.TRADE_RETCODE_DONE,
+                comment="done",
+                order=order_ticket,
+                deal=0,
+                volume=volume,
+                price=price,
+            )
+        # fallback for unknown actions
+        return FakeMT5TradeResult(
             retcode=self.order_send_result.retcode,
             comment=self.order_send_result.comment,
             order=self.order_send_result.order,
@@ -322,12 +387,6 @@ class FakeMT5Backend:
             volume=volume,
             price=price,
         )
-        if result.retcode not in {self.TRADE_RETCODE_DONE, self.TRADE_RETCODE_DONE_PARTIAL}:
-            return result
-
-        if action == self.TRADE_ACTION_DEAL:
-            self._apply_deal_request(request, volume)
-        return result
 
     def _apply_deal_request(self, request: Mapping[str, object], volume: float) -> None:
         symbol = str(request["symbol"])
@@ -377,4 +436,58 @@ class FakeMT5Backend:
                     magic=position.magic,
                     comment=position.comment,
                 )
+            return
+
+    def _apply_pending_request(self, request: Mapping[str, object], volume: float) -> None:
+        new_ticket = max((o.ticket for o in self.orders), default=2000) + 1
+        symbol = str(request["symbol"])
+        order_type = int(cast(int | float | str, request["type"]))
+        price = float(cast(float | int | str, request.get("price", 0.0)))
+        self.orders.append(
+            FakeMT5Order(
+                ticket=new_ticket,
+                symbol=symbol,
+                volume_initial=volume,
+                price_open=price,
+                state=1,
+                type=order_type,
+            )
+        )
+        # Return ticket in the result via order_send_result override so callers get it
+        self.order_send_result = FakeMT5TradeResult(
+            retcode=self.TRADE_RETCODE_DONE,
+            comment="done",
+            order=new_ticket,
+            deal=0,
+            volume=volume,
+            price=price,
+        )
+
+    def _apply_remove_request(self, request: Mapping[str, object]) -> None:
+        order_ticket = int(cast(int | float | str, request["order"]))
+        self.orders = [o for o in self.orders if o.ticket != order_ticket]
+
+    def _apply_modify_request(self, request: Mapping[str, object]) -> None:
+        order_ticket = int(cast(int | float | str, request["order"]))
+        new_price = float(cast(float | int | str, request.get("price", 0.0)))
+        for index, order in enumerate(self.orders):
+            if order.ticket != order_ticket:
+                continue
+            self.orders[index] = FakeMT5Order(
+                ticket=order.ticket,
+                symbol=order.symbol,
+                volume_initial=order.volume_initial,
+                price_open=new_price if new_price else order.price_open,
+                state=order.state,
+                type=order.type,
+            )
+            # Surface the ticket as the order field in the result
+            self.order_send_result = FakeMT5TradeResult(
+                retcode=self.TRADE_RETCODE_DONE,
+                comment="done",
+                order=order_ticket,
+                deal=0,
+                volume=order.volume_initial,
+                price=new_price if new_price else order.price_open,
+            )
             return

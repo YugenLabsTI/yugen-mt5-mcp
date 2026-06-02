@@ -116,12 +116,23 @@ def _invalid_params(message: str) -> dict[str, object]:
     return {"status": "error", "error_code": "invalid_params", "error_message": message}
 
 
-def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
+def _disabled_response() -> dict[str, object]:
+    """REQ-8.2: typed error returned by every chart tool when the bridge is disabled."""
+    return {
+        "status": "error",
+        "error_code": "service_unavailable",
+        "error_message": (
+            "chart bridge is disabled: set YUGEN_MT5_CHART_SHARED_SECRET to enable"
+        ),
+    }
+
+
+def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient | None) -> None:
     """Register the 9 chart drawing tools on the given FastMCP instance (REQ-1 to REQ-3).
 
-    Tools are only registered when a ChartBridgeClient is provided; callers are
-    responsible for not calling this function when the bridge is disabled.
-    The function MUST NOT be called with a None client.
+    Tools are ALWAYS registered regardless of whether the bridge is enabled
+    (REQ-8.2). When ``chart_client`` is ``None`` (bridge disabled), each tool
+    returns a ``service_unavailable`` typed error without contacting the bridge.
     """
 
     # ------------------------------------------------------------------ #
@@ -131,6 +142,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
     @mcp.tool
     def draw_sl_line(symbol: str, price: float, label: str = "SL") -> object:
         """Draw a red stop-loss horizontal line on the chart for the given symbol."""
+        if chart_client is None:
+            return _disabled_response()
         name = f"{_YUGEN_PREFIX}sl_{uuid4().hex}"
         spec = ChartObjectSpec(
             name=name,
@@ -150,6 +163,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
     @mcp.tool
     def draw_tp_line(symbol: str, price: float, label: str = "TP") -> object:
         """Draw a green take-profit horizontal line on the chart for the given symbol."""
+        if chart_client is None:
+            return _disabled_response()
         name = f"{_YUGEN_PREFIX}tp_{uuid4().hex}"
         spec = ChartObjectSpec(
             name=name,
@@ -174,6 +189,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
         label: str = "",
     ) -> object:
         """Draw a supply/demand zone rectangle between price_low and price_high."""
+        if chart_client is None:
+            return _disabled_response()
         if price_low >= price_high:
             return _invalid_params("price_low must be less than price_high")
         name = f"{_YUGEN_PREFIX}zone_{uuid4().hex}"
@@ -203,6 +220,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
         label: str = "",
     ) -> object:
         """Draw a trend line between two anchor points (each with time and price)."""
+        if chart_client is None:
+            return _disabled_response()
         if not point1 or not point2:
             return _invalid_params("both point1 and point2 are required")
         t1: str | None = str(point1.get("time")) if point1.get("time") is not None else None
@@ -215,14 +234,19 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
             return _invalid_params(
                 f"point2.time must be a valid ISO-8601 UTC datetime; got {t2!r}"
             )
+        # S-C2-1: reject absent or None price — explicit 0.0 is accepted, absent key is a bug.
+        if "price" not in point1 or point1["price"] is None:
+            return _invalid_params("point1.price is required (got absent or None)")
+        if "price" not in point2 or point2["price"] is None:
+            return _invalid_params("point2.price is required (got absent or None)")
         name = f"{_YUGEN_PREFIX}trend_{uuid4().hex}"
         spec = ChartObjectSpec(
             name=name,
             object_type="TREND",
             properties={"description": label},
             points=(
-                ChartObjectPoint(time=t1, price=float(cast(float, point1.get("price") or 0))),
-                ChartObjectPoint(time=t2, price=float(cast(float, point2.get("price") or 0))),
+                ChartObjectPoint(time=t1, price=float(cast(float, point1["price"]))),
+                ChartObjectPoint(time=t2, price=float(cast(float, point2["price"]))),
             ),
         )
         try:
@@ -237,6 +261,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
     @mcp.tool
     def annotate_text(symbol: str, time: str, price: float, text: str) -> object:
         """Place a text annotation at the given time/price anchor on the chart."""
+        if chart_client is None:
+            return _disabled_response()
         if not text or not text.strip():
             return _invalid_params("text must be non-empty")
         if not _validate_iso_time(time):
@@ -274,6 +300,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
         Ownership: the generated name is always ``yugen_obj_<uuid>`` so the safety boundary
         holds even on the generic path.
         """
+        if chart_client is None:
+            return _disabled_response()
         if not object_type or not object_type.strip():
             return _invalid_params("object_type must be non-empty")
         if not points:
@@ -317,6 +345,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
     @mcp.tool
     def list_charts() -> object:
         """Return all currently open MT5 charts (platform query — no yugen filter)."""
+        if chart_client is None:
+            return _disabled_response()
         try:
             charts = chart_client.list_charts()
         except ChartBridgeError as error:
@@ -329,6 +359,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
     @mcp.tool
     def delete_chart_object(name: str, symbol: str | None = None) -> object:
         """Delete a single chart object. Only yugen_* objects may be deleted (REQ-4.3)."""
+        if chart_client is None:
+            return _disabled_response()
         if not name.startswith(_YUGEN_PREFIX):
             return {
                 "status": "error",
@@ -345,6 +377,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
     @mcp.tool
     def clear_yugen_objects(symbol: str | None = None) -> object:
         """Delete all yugen_* objects on the specified chart, or all open charts if omitted."""
+        if chart_client is None:
+            return _disabled_response()
         try:
             result = chart_client.clear_objects(symbol=symbol)
         except ChartBridgeError as error:
@@ -713,6 +747,8 @@ def create_server(
             session_store=session_store,
             config=config,
         )
-    if chart_client is not None:
-        register_chart_tools(mcp, chart_client)
+    # Chart tools are ALWAYS registered (REQ-8.2). When chart_client is None the
+    # bridge is disabled; each tool returns a typed service_unavailable error on
+    # invocation without contacting the bridge. The tool surface is always visible.
+    register_chart_tools(mcp, chart_client)
     return mcp

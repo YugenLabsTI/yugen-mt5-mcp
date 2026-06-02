@@ -93,6 +93,17 @@ class StructuredRow:
         return self._values[key]
 
 
+class MinimalOrderCheckResult:
+    retcode = 10009
+    comment = "Done"
+
+
+class RealisticOrderCheckBackend(FakeMT5Backend):
+    def order_check(self, request: object) -> MinimalOrderCheckResult:
+        del request
+        return MinimalOrderCheckResult()
+
+
 def test_default_backend_initializes_imported_metatrader_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -115,6 +126,15 @@ def test_default_backend_reports_initialization_failure(
 
     with pytest.raises(MT5AdapterError, match="initialize failed"):
         load_default_backend()
+
+
+def test_check_trade_accepts_real_mt5_order_check_result_shape() -> None:
+    adapter = MT5Adapter(backend=RealisticOrderCheckBackend())
+
+    result = adapter.check_trade({"symbol": "EURUSD", "volume": 0.1})
+
+    assert result.retcode == 10009
+    assert result.comment == "Done"
 
 
 def test_optional_position_and_order_symbol_filter_is_omitted_when_absent() -> None:

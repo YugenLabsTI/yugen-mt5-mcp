@@ -4,6 +4,10 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Literal
 
+import pytest
+
+import yugen_mt5_mcp.app as app_module
+from tests.fakes.fake_mt5 import FakeMT5Backend
 from yugen_mt5_mcp.app import (
     ALLOWED_SYMBOLS_ENV,
     AUDIT_PATH_ENV,
@@ -14,7 +18,12 @@ from yugen_mt5_mcp.app import (
     resolve_audit_path,
     run_stdio,
 )
+from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.config import AppConfig
+from yugen_mt5_mcp.doctor import DoctorService, DoctorStatus
+from yugen_mt5_mcp.market_data import MarketDataService
+from yugen_mt5_mcp.mt5_adapter import MT5Adapter
+from yugen_mt5_mcp.server import READ_ONLY_TOOL_NAMES
 
 
 class FakeServer:
@@ -57,16 +66,21 @@ def test_parse_allowed_symbols_accepts_wildcard_with_warning() -> None:
     )
 
 
-def test_build_runtime_uses_stdio_defaults_without_real_mt5(tmp_path: Path) -> None:
+def test_build_runtime_injected_server_factory_receives_market_data_and_doctor_service(
+    tmp_path: Path,
+) -> None:
     created_configs: list[AppConfig] = []
 
-    def adapter_factory() -> object:
-        return object()
+    def adapter_factory() -> MT5Adapter:
+        return MT5Adapter(backend=FakeMT5Backend())
 
-    def server_factory(config: AppConfig, adapter: object, audit_path: Path) -> FakeServer:
-        del adapter
-        created_configs.append(config)
-        assert audit_path == tmp_path / "audit.sqlite3"
+    def server_factory(market_data: MarketDataService, doctor_service: DoctorService) -> FakeServer:
+        created_configs.append(market_data._config)
+        assert market_data._audit_store.database_path == tmp_path / "audit.sqlite3"
+        assert doctor_service.run().status is DoctorStatus.OK
+        assert doctor_service.run().checks[-1].details == {
+            "registered": list(READ_ONLY_TOOL_NAMES)
+        }
         return FakeServer()
 
     runtime = build_runtime(
@@ -78,6 +92,62 @@ def test_build_runtime_uses_stdio_defaults_without_real_mt5(tmp_path: Path) -> N
 
     assert created_configs[0].risk.allowed_symbols == ("EURUSD",)
     assert runtime.warnings == ()
+
+
+def test_build_runtime_default_factory_wires_doctor_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_config: AppConfig | None = None
+    captured_audit_store: AuditStore | None = None
+    captured_read_tool_names: tuple[str, ...] | None = None
+    captured_market_data: MarketDataService | None = None
+    captured_doctor_service: object | None = None
+    fake_server = FakeServer()
+    fake_doctor = object()
+
+    def fake_create_default_doctor(
+        *,
+        config: AppConfig,
+        audit_store: AuditStore,
+        adapter: object,
+        read_tool_names: tuple[str, ...],
+    ) -> object:
+        nonlocal captured_config, captured_audit_store, captured_read_tool_names
+        captured_config = config
+        captured_audit_store = audit_store
+        captured_read_tool_names = read_tool_names
+        assert isinstance(adapter, MT5Adapter)
+        return fake_doctor
+
+    def fake_create_server(
+        market_data: MarketDataService,
+        doctor_service: object | None = None,
+    ) -> FakeServer:
+        nonlocal captured_market_data, captured_doctor_service
+        captured_market_data = market_data
+        captured_doctor_service = doctor_service
+        return fake_server
+
+    monkeypatch.setattr(app_module, "create_default_doctor", fake_create_default_doctor)
+    monkeypatch.setattr(app_module, "create_server", fake_create_server)
+
+    runtime = build_runtime(
+        env={ALLOWED_SYMBOLS_ENV: "EURUSD"},
+        audit_path=tmp_path / "audit.sqlite3",
+        adapter_factory=lambda: MT5Adapter(backend=FakeMT5Backend()),
+    )
+
+    assert runtime.server is fake_server
+    assert captured_config is not None
+    assert captured_audit_store is not None
+    assert captured_read_tool_names is not None
+    assert captured_market_data is not None
+    assert captured_config.risk.allowed_symbols == ("EURUSD",)
+    assert captured_audit_store.database_path == tmp_path / "audit.sqlite3"
+    assert captured_read_tool_names == READ_ONLY_TOOL_NAMES
+    assert captured_doctor_service is fake_doctor
+    assert captured_market_data.get_tick(symbol="EURUSD").symbol == "EURUSD"
 
 
 def test_resolve_audit_path_uses_absolute_env_value() -> None:
@@ -97,12 +167,12 @@ def test_resolve_audit_path_uses_default_when_env_is_blank() -> None:
 def test_build_runtime_uses_audit_path_from_env_without_real_mt5(tmp_path: Path) -> None:
     audit_path = tmp_path / "claude" / "audit.sqlite3"
 
-    def adapter_factory() -> object:
-        return object()
+    def adapter_factory() -> MT5Adapter:
+        return MT5Adapter(backend=FakeMT5Backend())
 
-    def server_factory(config: AppConfig, adapter: object, received_path: Path) -> FakeServer:
-        del config, adapter
-        assert received_path == audit_path
+    def server_factory(market_data: MarketDataService, doctor_service: DoctorService) -> FakeServer:
+        assert market_data._audit_store.database_path == audit_path
+        assert doctor_service.run().checks[1].details["database_path"] == str(audit_path)
         return FakeServer()
 
     build_runtime(

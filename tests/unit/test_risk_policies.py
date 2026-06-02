@@ -156,6 +156,95 @@ def test_risk_policy_blocks_excess_exposure(tmp_path: Path) -> None:
         )
 
 
+def test_unlimited_symbol_exposure_allows_excess(tmp_path: Path) -> None:
+    """max_symbol_exposure=None disables the cumulative exposure gate."""
+    policy, adapter, _, _ = build_policy(
+        tmp_path,
+        risk_config=RiskConfig(
+            allowed_symbols=("EURUSD",),
+            allowed_account_modes=("hedging",),
+            allow_live_trading=True,
+            max_order_volume=Decimal("1.00"),
+            max_symbol_exposure=None,
+        ),
+    )
+
+    approval = policy.validate(
+        RiskCheckRequest(
+            session_id="session-1",
+            actor="agent:test",
+            action=TradeAction.OPEN,
+            symbol="EURUSD",
+            volume=Decimal("0.90"),
+            account=adapter.get_account(),
+            positions=adapter.list_positions("EURUSD"),
+        )
+    )
+
+    assert approval.symbol == "EURUSD"
+
+
+def test_finite_order_volume_limit_is_enforced_at_boundary(tmp_path: Path) -> None:
+    """A custom finite max_order_volume rejects above it and allows the boundary."""
+    policy, adapter, _, _ = build_policy(
+        tmp_path,
+        risk_config=RiskConfig(
+            allowed_symbols=("EURUSD",),
+            allowed_account_modes=("hedging",),
+            allow_live_trading=True,
+            max_order_volume=Decimal("2.0"),
+            max_symbol_exposure=None,
+        ),
+    )
+
+    def _request(volume: Decimal) -> RiskCheckRequest:
+        return RiskCheckRequest(
+            session_id="session-1",
+            actor="agent:test",
+            action=TradeAction.OPEN,
+            symbol="EURUSD",
+            volume=volume,
+            account=adapter.get_account(),
+            positions=adapter.list_positions("EURUSD"),
+        )
+
+    # Above the limit is rejected.
+    with pytest.raises(RiskPolicyError, match="max_order_volume"):
+        policy.validate(_request(Decimal("3.0")))
+
+    # Exactly at the limit is allowed (strict `>` boundary).
+    approval = policy.validate(_request(Decimal("2.0")))
+    assert approval.volume == Decimal("2.0")
+
+
+def test_unlimited_order_volume_allows_large_single_order(tmp_path: Path) -> None:
+    """max_order_volume=None disables the per-order volume gate."""
+    policy, adapter, _, _ = build_policy(
+        tmp_path,
+        risk_config=RiskConfig(
+            allowed_symbols=("EURUSD",),
+            allowed_account_modes=("hedging",),
+            allow_live_trading=True,
+            max_order_volume=None,
+            max_symbol_exposure=None,
+        ),
+    )
+
+    approval = policy.validate(
+        RiskCheckRequest(
+            session_id="session-1",
+            actor="agent:test",
+            action=TradeAction.OPEN,
+            symbol="EURUSD",
+            volume=Decimal("100.0"),
+            account=adapter.get_account(),
+            positions=adapter.list_positions("EURUSD"),
+        )
+    )
+
+    assert approval.volume == Decimal("100.0")
+
+
 def test_wildcard_allowed_symbols_permits_any_symbol_for_trading(
     tmp_path: Path,
 ) -> None:

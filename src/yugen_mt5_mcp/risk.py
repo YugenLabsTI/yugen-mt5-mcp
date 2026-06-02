@@ -151,7 +151,8 @@ class RiskPolicy:
     def _validate_volume(self, volume: Decimal) -> None:
         if volume <= 0:
             raise RiskPolicyError("volume must be greater than zero")
-        if volume > self._config.risk.max_order_volume:
+        max_order_volume = self._config.risk.max_order_volume
+        if max_order_volume is not None and volume > max_order_volume:
             raise RiskPolicyError("volume exceeds configured max_order_volume")
 
     def _validate_exposure(
@@ -159,8 +160,11 @@ class RiskPolicy:
         positions: Sequence[PositionSnapshot],
         new_volume: Decimal,
     ) -> None:
+        limit = self._config.risk.max_symbol_exposure
+        if limit is None:
+            return
         current = sum(Decimal(str(position.volume)) for position in positions)
-        if current + new_volume > self._config.risk.max_symbol_exposure:
+        if current + new_volume > limit:
             raise RiskPolicyError("trade would exceed configured max_symbol_exposure")
 
     def _validate_real_account_ack(self, session_id: str, account_login: int) -> None:

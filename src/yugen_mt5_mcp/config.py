@@ -80,8 +80,9 @@ class TransportConfig:
 class RiskConfig:
     allowed_symbols: tuple[str, ...] = ()
     allowed_account_modes: tuple[str, ...] = ()
-    max_order_volume: Decimal = Decimal("1.0")
-    max_symbol_exposure: Decimal = Decimal("1.0")
+    # None means "no limit" — the corresponding risk gate is disabled.
+    max_order_volume: Decimal | None = Decimal("1.0")
+    max_symbol_exposure: Decimal | None = Decimal("1.0")
     allow_live_trading: bool = False
     allow_real_accounts: bool = False
     trading_window_start: time | None = None

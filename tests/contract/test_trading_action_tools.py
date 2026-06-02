@@ -7,7 +7,6 @@ Mirrors the pattern from test_market_data_tools.py.
 from __future__ import annotations
 
 import asyncio
-from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -19,7 +18,7 @@ from yugen_mt5_mcp.config import AppConfig, RiskConfig
 from yugen_mt5_mcp.market_data import MarketDataService
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
 from yugen_mt5_mcp.risk import RiskPolicy
-from yugen_mt5_mcp.server import TRADING_TOOL_NAMES, create_server
+from yugen_mt5_mcp.server import create_server
 from yugen_mt5_mcp.session import SessionRiskStore
 from yugen_mt5_mcp.trading import BulkTradeService, TradingService
 
@@ -191,7 +190,10 @@ def test_place_market_order_happy_path(tmp_path: Path) -> None:
 
     payload = asyncio.run(call())
     # AT-9-a: all 7 required fields must be present
-    for field in ("executed_price", "executed_volume", "order", "deal", "applied_sl", "applied_tp", "deviation"):
+    for field in (
+        "executed_price", "executed_volume", "order", "deal",
+        "applied_sl", "applied_tp", "deviation",
+    ):
         assert field in payload, f"Missing field: {field!r}"
 
 
@@ -428,8 +430,8 @@ def test_acknowledge_real_account_enables_trading(tmp_path: Path) -> None:
         from fastmcp.client import Client
 
         async with Client(server) as client:  # type: ignore[arg-type]
-            # First: acknowledge
-            ack_result = await client.call_tool(
+            # First: acknowledge (result unused — side effect is the ack)
+            await client.call_tool(
                 "acknowledge_real_account",
                 {
                     "session_id": "s1",
@@ -653,3 +655,169 @@ def test_audit_event_sequence(tmp_path: Path) -> None:
     decisions = [e["decision"] for e in events]
     assert "executed" in decisions
     assert "duplicate" in decisions
+
+
+# ---------------------------------------------------------------------------
+# Error-path contract tests — AT-1-d, AT-1-e, AT-5-c, AT-3-b
+#
+# All 4 reveal that the existing tool layer already surfaces validation
+# and service errors as clean ToolError exceptions (NOT unhandled tracebacks).
+# These tests pin that contract through the tool surface.
+# ---------------------------------------------------------------------------
+
+
+# --- AT-1-d: place_market_order with an invalid/unknown symbol ---
+
+
+def test_place_market_order_invalid_symbol_returns_clean_rejection(
+    tmp_path: Path,
+) -> None:
+    """AT-1-d: unknown symbol raises a clean ToolError, no executed audit event."""
+    import pytest
+    from fastmcp.client import Client
+
+    server, _, session_store, audit_store = _build_server(tmp_path)
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+
+    async def call() -> str:
+        async with Client(server) as client:  # type: ignore[arg-type]
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "place_market_order",
+                    {
+                        "session_id": "s1",
+                        "idempotency_key": "k-bad-sym",
+                        "symbol": "INVALID_SYM",
+                        "side": "buy",
+                        "volume": "0.1",
+                    },
+                )
+            return str(exc_info.value)
+
+    err_msg = asyncio.run(call())
+    # Clean rejection — must mention the symbol, not a raw traceback
+    assert "INVALID_SYM" in err_msg or "symbol" in err_msg.lower()
+    # No executed audit event recorded
+    events = audit_store.fetch_all()
+    executed = [e for e in events if e["decision"] == "executed"]
+    assert len(executed) == 0
+
+
+# --- AT-1-e: place_market_order with zero volume ---
+
+
+def test_place_market_order_zero_volume_returns_clean_rejection(
+    tmp_path: Path,
+) -> None:
+    """AT-1-e: volume=0 raises a clean ToolError before MT5 is called."""
+    import pytest
+    from fastmcp.client import Client
+
+    server, _, session_store, audit_store = _build_server(tmp_path)
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+
+    async def call() -> str:
+        async with Client(server) as client:  # type: ignore[arg-type]
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "place_market_order",
+                    {
+                        "session_id": "s1",
+                        "idempotency_key": "k-zero-vol",
+                        "symbol": "EURUSD",
+                        "side": "buy",
+                        "volume": "0",
+                    },
+                )
+            return str(exc_info.value)
+
+    err_msg = asyncio.run(call())
+    # Clean rejection — must mention volume
+    assert "volume" in err_msg.lower()
+    # No executed audit event recorded
+    events = audit_store.fetch_all()
+    executed = [e for e in events if e["decision"] == "executed"]
+    assert len(executed) == 0
+
+
+# --- AT-5-c: close_position with negative volume ---
+
+
+def test_close_position_negative_volume_returns_clean_rejection(
+    tmp_path: Path,
+) -> None:
+    """AT-5-c: volume=-0.1 raises a clean ToolError before MT5 is called."""
+    import pytest
+    from fastmcp.client import Client
+
+    server, _, session_store, audit_store = _build_server(tmp_path)
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+
+    async def call() -> str:
+        async with Client(server) as client:  # type: ignore[arg-type]
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "close_position",
+                    {
+                        "session_id": "s1",
+                        "idempotency_key": "k-neg-vol",
+                        "symbol": "EURUSD",
+                        "ticket": 1001,
+                        "volume": "-0.1",
+                    },
+                )
+            return str(exc_info.value)
+
+    err_msg = asyncio.run(call())
+    # Clean rejection — must mention volume
+    assert "volume" in err_msg.lower()
+    # No executed audit event recorded
+    events = audit_store.fetch_all()
+    executed = [e for e in events if e["decision"] == "executed"]
+    assert len(executed) == 0
+
+
+# --- AT-3-b: modify_position with a nonexistent ticket ---
+
+
+def test_modify_position_nonexistent_ticket_returns_clean_rejection(
+    tmp_path: Path,
+) -> None:
+    """AT-3-b: nonexistent ticket raises a clean ToolError, no executed audit event."""
+    import pytest
+    from fastmcp.client import Client
+
+    server, _, session_store, audit_store = _build_server(tmp_path)
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+
+    async def call() -> str:
+        async with Client(server) as client:  # type: ignore[arg-type]
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "modify_position",
+                    {
+                        "session_id": "s1",
+                        "idempotency_key": "k-no-ticket",
+                        "symbol": "EURUSD",
+                        "ticket": 99999,
+                        "stop_loss": 1.08,
+                        "take_profit": 1.12,
+                    },
+                )
+            return str(exc_info.value)
+
+    err_msg = asyncio.run(call())
+    # Clean rejection — must mention ticket or position not found
+    assert "ticket" in err_msg.lower() or "position" in err_msg.lower()
+    # No executed audit event recorded
+    events = audit_store.fetch_all()
+    executed = [e for e in events if e["decision"] == "executed"]
+    assert len(executed) == 0

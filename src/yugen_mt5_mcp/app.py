@@ -22,6 +22,8 @@ from .trading import BulkTradeService, TradingService
 ALLOWED_SYMBOLS_ENV = "YUGEN_MT5_ALLOWED_SYMBOLS"
 AUDIT_PATH_ENV = "YUGEN_MT5_AUDIT_PATH"
 CONSENT_ENV = "YUGEN_MT5_REAL_ACCOUNT_CONSENT"
+ALLOW_LIVE_TRADING_ENV = "YUGEN_MT5_ALLOW_LIVE_TRADING"
+ALLOW_REAL_ACCOUNTS_ENV = "YUGEN_MT5_ALLOW_REAL_ACCOUNTS"
 DEFAULT_AUDIT_PATH = Path("var/audit.sqlite3")
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -79,6 +81,11 @@ def _parse_consent_env(env: Mapping[str, str]) -> bool:
     return env.get(CONSENT_ENV, "").strip().lower() in _TRUTHY
 
 
+def _parse_true_false_env(env: Mapping[str, str], key: str) -> bool:
+    """Return True only when an environment flag is explicitly set to true."""
+    return env.get(key, "").strip().lower() == "true"
+
+
 def build_runtime(
     *,
     env: Mapping[str, str] | None = None,
@@ -90,10 +97,14 @@ def build_runtime(
     resolved_audit_path = resolve_audit_path(runtime_env) if audit_path is None else audit_path
     allowed_symbols, warnings = parse_allowed_symbols(runtime_env)
     real_account_consent_env = _parse_consent_env(runtime_env)
+    allow_live_trading = _parse_true_false_env(runtime_env, ALLOW_LIVE_TRADING_ENV)
+    allow_real_accounts = _parse_true_false_env(runtime_env, ALLOW_REAL_ACCOUNTS_ENV)
     config = AppConfig(
         audit=AuditConfig(database_path=resolved_audit_path),
         risk=RiskConfig(
             allowed_symbols=allowed_symbols,
+            allow_live_trading=allow_live_trading,
+            allow_real_accounts=allow_real_accounts,
             real_account_consent_env=real_account_consent_env,
         ),
     )

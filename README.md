@@ -43,10 +43,22 @@ client, must reach the Windows-hosted server over a network boundary.
    $env:YUGEN_MT5_ALLOWED_SYMBOLS="*"
    ```
 
-   Wildcard mode prints a warning at startup. It does not relax trading risk
-   gates.
+    Wildcard mode prints a warning at startup. It does not relax trading risk
+    gates.
 
-4. Start the stdio MCP server:
+4. To place demo orders, explicitly enable live trading and allow the trading
+   symbol. Use `true` / `false` values:
+
+   ```powershell
+   $env:YUGEN_MT5_ALLOWED_SYMBOLS="Boom 1000 Index"
+   $env:YUGEN_MT5_ALLOW_LIVE_TRADING="true"
+   $env:YUGEN_MT5_ALLOW_REAL_ACCOUNTS="false"
+   ```
+
+   `YUGEN_MT5_ALLOW_REAL_ACCOUNTS="true"` is only for real accounts. Demo
+   accounts do not need it.
+
+5. Start the stdio MCP server:
 
    ```powershell
    python -m yugen_mt5_mcp
@@ -76,7 +88,9 @@ directory:
       "args": ["-m", "yugen_mt5_mcp"],
       "cwd": "C:\\Users\\sgg10\\Documents\\yugen-mt5-mcp",
       "env": {
-        "YUGEN_MT5_ALLOWED_SYMBOLS": "EURUSD",
+        "YUGEN_MT5_ALLOWED_SYMBOLS": "Boom 1000 Index",
+        "YUGEN_MT5_ALLOW_LIVE_TRADING": "true",
+        "YUGEN_MT5_ALLOW_REAL_ACCOUNTS": "false",
         "YUGEN_MT5_AUDIT_PATH": "C:\\Users\\sgg10\\AppData\\Local\\Yugen\\mt5-mcp\\audit.sqlite3"
       }
     }

@@ -31,20 +31,20 @@ client, must reach the Windows-hosted server over a network boundary.
    python -m pip install -e ".[dev]"
    ```
 
-3. Choose the read-symbol allowlist:
+3. Choose the symbol allowlist for reads and trading:
 
    ```powershell
    $env:YUGEN_MT5_ALLOWED_SYMBOLS="EURUSD,XAUUSD"
    ```
 
-   For exploration only, `*` allows every symbol for read tools:
+   `*` allows every symbol for reads and trading:
 
    ```powershell
    $env:YUGEN_MT5_ALLOWED_SYMBOLS="*"
    ```
 
-    Wildcard mode prints a warning at startup. It does not relax trading risk
-    gates.
+   Wildcard mode prints a warning at startup. It does not relax live-trading,
+   real-account, volume, or exposure gates.
 
 4. To place demo orders, explicitly enable live trading and allow the trading
    symbol. Use `true` / `false` values:

@@ -101,7 +101,7 @@ class TradingService:
         comment: str | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
-        symbol = self._risk_policy.resolve_symbol(symbol)
+        symbol = self._resolve_trading_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         approval = self._risk_policy.validate(
@@ -145,7 +145,7 @@ class TradingService:
         ticket: int | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
-        symbol = self._risk_policy.resolve_symbol(symbol)
+        symbol = self._resolve_trading_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         target_position = self._resolve_close_target(
@@ -195,7 +195,7 @@ class TradingService:
         take_profit: float | None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
-        symbol = self._risk_policy.resolve_symbol(symbol)
+        symbol = self._resolve_trading_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         target_position = self._find_position(ticket=ticket, symbol=symbol, positions=positions)
@@ -379,6 +379,19 @@ class TradingService:
             request["comment"] = comment
         return request
 
+    def resolve_symbol(self, symbol: str) -> str:
+        """Return the MT5-facing broker symbol for a trading request."""
+        return self._resolve_trading_symbol(symbol)
+
+    def _resolve_trading_symbol(self, symbol: str) -> str:
+        resolved = self._risk_policy.resolve_symbol(symbol)
+        if not self._risk_policy.allows_all_symbols():
+            return resolved
+        for broker_symbol in self._adapter.list_symbols():
+            if resolved.casefold() == broker_symbol.symbol.casefold():
+                return broker_symbol.symbol
+        return resolved
+
     def place_pending_order(
         self,
         *,
@@ -393,7 +406,7 @@ class TradingService:
         comment: str | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
-        symbol = self._risk_policy.resolve_symbol(symbol)
+        symbol = self._resolve_trading_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         approval = self._risk_policy.validate(
@@ -437,7 +450,7 @@ class TradingService:
         take_profit: float | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
-        symbol = self._risk_policy.resolve_symbol(symbol)
+        symbol = self._resolve_trading_symbol(symbol)
         account = self._adapter.get_account()
         orders = self._adapter.list_orders(symbol)
         target_order = self._find_order(ticket=ticket, symbol=symbol, orders=orders)
@@ -475,7 +488,7 @@ class TradingService:
         symbol: str,
         dry_run: bool = False,
     ) -> ExecutedTrade:
-        symbol = self._risk_policy.resolve_symbol(symbol)
+        symbol = self._resolve_trading_symbol(symbol)
         account = self._adapter.get_account()
         orders = self._adapter.list_orders(symbol)
         target_order = self._find_order(ticket=ticket, symbol=symbol, orders=orders)
@@ -648,6 +661,8 @@ class BulkTradeService:
         confirm: bool = False,
     ) -> BulkTradeResult:
         self._require_confirm(confirm)
+        if symbol is not None:
+            symbol = self._trading.resolve_symbol(symbol)
         positions = self._adapter.list_positions(symbol)
         targets = self._apply_filter(positions, filter)
         items = self._run_close_loop(
@@ -672,6 +687,8 @@ class BulkTradeService:
         confirm: bool = False,
     ) -> BulkTradeResult:
         self._require_confirm(confirm)
+        if symbol is not None:
+            symbol = self._trading.resolve_symbol(symbol)
         orders = self._adapter.list_orders(symbol)
         items = self._run_cancel_loop(
             orders=orders,

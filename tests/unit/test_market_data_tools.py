@@ -10,6 +10,7 @@ import pytest
 from tests.fakes.fake_mt5 import FakeMT5Backend, FakeMT5Symbol, FakeMT5Tick
 from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.config import AppConfig, RiskConfig
+from yugen_mt5_mcp.doctor import DoctorService, create_default_doctor
 from yugen_mt5_mcp.market_data import MarketDataError, MarketDataService
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
 from yugen_mt5_mcp.server import create_server
@@ -31,6 +32,24 @@ def build_service(
     adapter = MT5Adapter(backend=backend)
     audit_store = AuditStore(tmp_path)
     return MarketDataService(config=config, adapter=adapter, audit_store=audit_store)
+
+
+def build_doctor(tmp_path: Path) -> DoctorService:
+    audit_path = tmp_path / "audit.sqlite3"
+    return create_default_doctor(
+        config=AppConfig(risk=RiskConfig(allowed_symbols=("EURUSD",))),
+        audit_store=AuditStore(audit_path),
+        adapter=MT5Adapter(backend=FakeMT5Backend()),
+        read_tool_names=(
+            "list_symbols",
+            "get_tick",
+            "get_candles",
+            "get_account",
+            "list_positions",
+            "list_orders",
+            "get_history",
+        ),
+    )
 
 
 def test_get_candles_returns_normalized_bars(tmp_path: Path) -> None:
@@ -151,6 +170,117 @@ def test_server_registers_read_tools_and_calls_candles(tmp_path: Path) -> None:
     assert "get_candles" in tool_names
     assert len(candles) == 2
     assert candles[0]["symbol"] == "EURUSD"
+
+
+def test_server_registration_preserves_existing_tool_contracts(tmp_path: Path) -> None:
+    service = build_service(tmp_path / "audit.sqlite3")
+    mcp = create_server(service)
+
+    async def inspect_tools() -> dict[str, object]:
+        from fastmcp.client import Client
+
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+            return {tool.name: tool.inputSchema for tool in tools}
+
+    tool_schemas = asyncio.run(inspect_tools())
+
+    assert list(tool_schemas) == [
+        "list_symbols",
+        "get_tick",
+        "get_candles",
+        "get_account",
+        "list_positions",
+        "list_orders",
+        "get_history",
+    ]
+    assert tool_schemas["list_symbols"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    assert tool_schemas["get_tick"] == {
+        "type": "object",
+        "properties": {"symbol": {"type": "string"}},
+        "required": ["symbol"],
+        "additionalProperties": False,
+    }
+    assert tool_schemas["get_candles"] == {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "timeframe": {"type": "string"},
+            "limit": {"type": "integer", "default": 100},
+        },
+        "required": ["symbol", "timeframe"],
+        "additionalProperties": False,
+    }
+    assert tool_schemas["get_account"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    assert tool_schemas["list_positions"] == {
+        "type": "object",
+        "properties": {
+            "symbol": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+            }
+        },
+        "additionalProperties": False,
+    }
+    assert tool_schemas["list_orders"] == tool_schemas["list_positions"]
+    assert tool_schemas["get_history"] == {
+        "type": "object",
+        "properties": {
+            "start": {"type": "string"},
+            "end": {"type": "string"},
+            "symbol": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+            },
+        },
+        "required": ["start", "end"],
+        "additionalProperties": False,
+    }
+
+
+def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path) -> None:
+    service = build_service(tmp_path / "audit.sqlite3")
+    doctor_service = build_doctor(tmp_path / "doctor")
+    mcp = create_server(service, doctor_service=doctor_service)
+
+    async def inspect_and_call_doctor() -> tuple[list[str], object]:
+        from fastmcp.client import Client
+
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+            result = await client.call_tool("doctor", {})
+            return [tool.name for tool in tools], result.data
+
+    tool_names, payload = asyncio.run(inspect_and_call_doctor())
+    report = cast(dict[str, object], payload)
+
+    assert tool_names == [
+        "list_symbols",
+        "get_tick",
+        "get_candles",
+        "get_account",
+        "list_positions",
+        "list_orders",
+        "get_history",
+        "doctor",
+    ]
+    assert report["status"] == "ok"
+    assert isinstance(report["generated_at"], str)
+    checks = cast(list[dict[str, object]], report["checks"])
+    assert [check["name"] for check in checks] == [
+        "config",
+        "audit_path",
+        "mt5_account",
+        "read_tools",
+    ]
 
 
 def test_get_history_returns_orders_and_deals(tmp_path: Path) -> None:

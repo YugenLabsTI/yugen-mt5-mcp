@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, TypeVar, cast
 from uuid import uuid4
 
@@ -275,4 +276,6 @@ def to_payload(value: Any) -> object:
         return value.isoformat()
     if isinstance(value, list):
         return [to_payload(item) for item in value]
+    if isinstance(value, Decimal):
+        return str(value)
     return cast(object, value)

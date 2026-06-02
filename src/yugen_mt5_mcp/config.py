@@ -86,6 +86,15 @@ class RiskConfig:
     allow_real_accounts: bool = False
     trading_window_start: time | None = None
     trading_window_end: time | None = None
+    # Consent source (c): env-var ambient pre-authorization.
+    # When True, per-session acknowledge_real_account is NOT required.
+    # Precedence: explicit per-session ack > config default actor > env-var bypass.
+    # WARNING: this grants ambient real-money consent — the doctor check
+    # will emit a WARNING when this is active so the risk stays visible.
+    real_account_consent_env: bool = False
+    # Server-level default actor identity used when no explicit actor is provided.
+    # DEFERRED SEAM: MCP Context-derived identity will override this in a later change.
+    default_actor: str = "mcp.trade"
 
 
 @dataclass(slots=True, frozen=True)
@@ -134,6 +143,8 @@ class AppConfig:
             allow_real_accounts=bool(risk_data.get("allow_real_accounts", False)),
             trading_window_start=_as_optional_time(risk_data.get("trading_window_start")),
             trading_window_end=_as_optional_time(risk_data.get("trading_window_end")),
+            real_account_consent_env=bool(risk_data.get("real_account_consent_env", False)),
+            default_actor=str(risk_data.get("default_actor", "mcp.trade")),
         )
 
         config = cls(transport=transport, audit=audit, risk=risk)

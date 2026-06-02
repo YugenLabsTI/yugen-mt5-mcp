@@ -151,11 +151,20 @@ class RiskPolicy:
             raise RiskPolicyError("trade would exceed configured max_symbol_exposure")
 
     def _validate_real_account_ack(self, session_id: str, account_login: int) -> None:
-        if not self._session_store.has_real_account_ack(
+        # Precedence (highest to lowest):
+        # (a) Explicit per-session ack in SessionRiskStore — human confirmed this session.
+        # (b) [env-var] Ambient pre-authorization via config.risk.real_account_consent_env.
+        #     This bypasses the per-session ack requirement when set.
+        #     NOTE: source (b) carries elevated risk — the doctor check will WARN when active.
+        # (c) No consent source satisfied → reject with clear message.
+        if self._session_store.has_real_account_ack(
             session_id=session_id,
             account_login=account_login,
         ):
-            raise RiskPolicyError("real account acknowledgement is required for this session")
+            return  # source (a): explicit per-session ack
+        if self._config.risk.real_account_consent_env:
+            return  # source (b): env-var ambient pre-authorization
+        raise RiskPolicyError("real account acknowledgement is required for this session")
 
     def _audit(
         self,

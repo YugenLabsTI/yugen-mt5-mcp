@@ -114,9 +114,7 @@ def test_build_runtime_reads_risk_limits_from_env(tmp_path: Path) -> None:
 
     assert configs[0].risk.max_symbol_exposure == Decimal("5.0")
     assert configs[0].risk.max_order_volume == Decimal("2.0")
-    # chart_bridge_disabled is expected when no secret is set — not a risk concern.
-    non_chart_warnings = tuple(w for w in runtime.warnings if w.code != "chart_bridge_disabled")
-    assert non_chart_warnings == ()
+    assert runtime.warnings == ()
 
 
 def test_build_runtime_defaults_risk_limits_when_env_absent(tmp_path: Path) -> None:

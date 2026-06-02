@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, TextIO
 
 from .audit import AuditStore
-from .config import AppConfig, RiskConfig
+from .config import AppConfig, AuditConfig, RiskConfig
+from .doctor import DoctorService, create_default_doctor
 from .market_data import MarketDataService
 from .mt5_adapter import MT5Adapter
-from .server import create_server
+from .server import READ_ONLY_TOOL_NAMES, create_server
 
 ALLOWED_SYMBOLS_ENV = "YUGEN_MT5_ALLOWED_SYMBOLS"
 AUDIT_PATH_ENV = "YUGEN_MT5_AUDIT_PATH"
@@ -71,16 +72,27 @@ def build_runtime(
     *,
     env: Mapping[str, str] | None = None,
     audit_path: Path | None = None,
-    adapter_factory: Callable[[], object] = MT5Adapter,
-    server_factory: Callable[[AppConfig, object, Path], RunnableServer] | None = None,
+    adapter_factory: Callable[[], MT5Adapter] = MT5Adapter,
+    server_factory: Callable[[MarketDataService, DoctorService], RunnableServer] | None = None,
 ) -> RuntimeApp:
     runtime_env = os.environ if env is None else env
     resolved_audit_path = resolve_audit_path(runtime_env) if audit_path is None else audit_path
     allowed_symbols, warnings = parse_allowed_symbols(runtime_env)
-    config = AppConfig(risk=RiskConfig(allowed_symbols=allowed_symbols))
+    config = AppConfig(
+        audit=AuditConfig(database_path=resolved_audit_path),
+        risk=RiskConfig(allowed_symbols=allowed_symbols),
+    )
     adapter = adapter_factory()
+    audit_store = AuditStore(resolved_audit_path)
+    market_data = MarketDataService(config=config, adapter=adapter, audit_store=audit_store)
+    doctor_service = create_default_doctor(
+        config=config,
+        audit_store=audit_store,
+        adapter=adapter,
+        read_tool_names=READ_ONLY_TOOL_NAMES,
+    )
     factory = _create_default_server if server_factory is None else server_factory
-    server = factory(config, adapter, resolved_audit_path)
+    server = factory(market_data, doctor_service)
     return RuntimeApp(server=server, warnings=warnings)
 
 
@@ -103,12 +115,8 @@ def main() -> None:
     run_stdio(runtime.server)
 
 
-def _create_default_server(config: AppConfig, adapter: object, audit_path: Path) -> RunnableServer:
-    if not isinstance(adapter, MT5Adapter):
-        raise TypeError("default server factory requires an MT5Adapter")
-    service = MarketDataService(
-        config=config,
-        adapter=adapter,
-        audit_store=AuditStore(audit_path),
-    )
-    return create_server(service)
+def _create_default_server(
+    market_data: MarketDataService,
+    doctor_service: DoctorService,
+) -> RunnableServer:
+    return create_server(market_data, doctor_service=doctor_service)

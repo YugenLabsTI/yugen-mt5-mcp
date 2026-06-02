@@ -67,6 +67,14 @@ class DoctorCheck(Protocol):
     def run(self) -> DoctorCheckResult: ...
 
 
+class RuntimeWarningLike(Protocol):
+    @property
+    def code(self) -> str: ...
+
+    @property
+    def message(self) -> str: ...
+
+
 class DoctorService:
     def __init__(
         self,
@@ -107,6 +115,7 @@ def create_default_doctor(
     audit_store: AuditStore,
     adapter: MT5Adapter,
     read_tool_names: Sequence[str],
+    entrypoint_warnings: Sequence[RuntimeWarningLike] = (),
 ) -> DoctorService:
     checks = cast(
         tuple[DoctorCheck, ...],
@@ -118,6 +127,10 @@ def create_default_doctor(
             ),
             _CallableDoctorCheck("mt5_account", lambda: _check_mt5_account(adapter)),
             _CallableDoctorCheck("read_tools", lambda: _check_read_tools(read_tool_names)),
+            _CallableDoctorCheck(
+                "runtime_context",
+                lambda: _check_runtime_context(config, entrypoint_warnings),
+            ),
         ),
     )
     return DoctorService(checks=checks)
@@ -222,6 +235,36 @@ def _check_read_tools(read_tool_names: Sequence[str]) -> DoctorCheckResult:
         severity=DoctorSeverity.INFO,
         summary="Baseline read-only tools are registered.",
         details={"registered": list(registered)},
+    )
+
+
+def _check_runtime_context(
+    config: AppConfig,
+    entrypoint_warnings: Sequence[RuntimeWarningLike],
+) -> DoctorCheckResult:
+    warning_details = [
+        {"code": warning.code, "message": warning.message} for warning in entrypoint_warnings
+    ]
+    details = {
+        "transport_mode": config.transport.mode.value,
+        "remote_enabled": config.transport.remote.enabled,
+        "allowed_symbols": list(config.risk.allowed_symbols),
+        "warnings": warning_details,
+    }
+    if warning_details:
+        return DoctorCheckResult(
+            name="runtime_context",
+            status=DoctorStatus.WARN,
+            severity=DoctorSeverity.WARNING,
+            summary="Runtime context includes non-blocking warnings.",
+            details=details,
+        )
+    return DoctorCheckResult(
+        name="runtime_context",
+        status=DoctorStatus.OK,
+        severity=DoctorSeverity.INFO,
+        summary="Runtime context is configured without non-blocking warnings.",
+        details=details,
     )
 
 

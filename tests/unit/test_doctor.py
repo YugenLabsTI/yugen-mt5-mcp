@@ -4,8 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.fakes.fake_mt5 import FakeMT5Backend
+from yugen_mt5_mcp.app import EntrypointWarning
 from yugen_mt5_mcp.audit import AuditStore
-from yugen_mt5_mcp.config import AppConfig, RemoteTransportConfig, TransportConfig, TransportMode
+from yugen_mt5_mcp.config import (
+    AppConfig,
+    RemoteTransportConfig,
+    RiskConfig,
+    TransportConfig,
+    TransportMode,
+)
 from yugen_mt5_mcp.doctor import (
     DoctorCheckResult,
     DoctorReport,
@@ -101,6 +108,7 @@ def test_create_default_doctor_reports_healthy_passive_runtime(tmp_path: Path) -
         "audit_path",
         "mt5_account",
         "read_tools",
+        "runtime_context",
     ]
     assert all(check.status is DoctorStatus.OK for check in report.checks)
 
@@ -126,6 +134,49 @@ def test_create_default_doctor_reports_degraded_runtime_details(tmp_path: Path) 
     assert checks["audit_path"].status is DoctorStatus.OK
     assert checks["mt5_account"].status is DoctorStatus.OK
     assert checks["read_tools"].status is DoctorStatus.FAIL
+
+
+def test_create_default_doctor_reports_runtime_context_warning_details(tmp_path: Path) -> None:
+    service = create_default_doctor(
+        config=AppConfig(
+            risk=RiskConfig(allowed_symbols=("*",)),
+        ),
+        audit_store=AuditStore(tmp_path / "audit.sqlite3"),
+        adapter=MT5Adapter(backend=FakeMT5Backend()),
+        read_tool_names=(
+            "list_symbols",
+            "get_tick",
+            "get_candles",
+            "get_account",
+            "list_positions",
+            "list_orders",
+            "get_history",
+        ),
+        entrypoint_warnings=(
+            EntrypointWarning(
+                code="allowed_symbols_wildcard",
+                message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+            ),
+        ),
+    )
+
+    report = service.run()
+
+    runtime_context = {check.name: check for check in report.checks}["runtime_context"]
+    assert report.status is DoctorStatus.WARN
+    assert runtime_context.status is DoctorStatus.WARN
+    assert runtime_context.severity is DoctorSeverity.WARNING
+    assert runtime_context.details == {
+        "transport_mode": "stdio",
+        "remote_enabled": False,
+        "allowed_symbols": ["*"],
+        "warnings": [
+            {
+                "code": "allowed_symbols_wildcard",
+                "message": "YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+            }
+        ],
+    }
 
 
 def test_create_default_doctor_reports_invalid_audit_parent(tmp_path: Path) -> None:

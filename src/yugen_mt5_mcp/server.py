@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
+from typing import cast
+from uuid import uuid4
 
 from fastmcp import FastMCP
 
+from .chart_bridge import (
+    ChartBridgeClient,
+    ChartBridgeError,
+    ChartBridgeProtocolError,
+    ChartBridgeTimeoutError,
+    ChartObjectPoint,
+    ChartObjectSpec,
+    ChartSelector,
+)
 from .config import AppConfig
 from .doctor import DoctorService
 from .market_data import MarketDataService, to_payload
@@ -39,6 +51,305 @@ TRADING_TOOL_NAMES = (
     "cancel_all_pending",
     "cancel_all_pending_by_symbol",
 )
+
+CHART_TOOL_NAMES = (
+    # Semantic drawing
+    "draw_sl_line",
+    "draw_tp_line",
+    "draw_zone",
+    "draw_trend_line",
+    "annotate_text",
+    # Generic escape-hatch
+    "draw_object",
+    # Management
+    "list_charts",
+    "delete_chart_object",
+    "clear_yugen_objects",
+)
+
+
+_YUGEN_PREFIX = "yugen_"
+
+
+def _chart_error_response(error: ChartBridgeError) -> dict[str, object]:
+    """Map a ChartBridgeError to a typed error dict (REQ-6).
+
+    Matching priority:
+    1. ChartBridgeTimeoutError → timeout
+    2. ChartBridgeProtocolError with 'not verified' → verify_failed
+    3. ChartBridgeProtocolError with 'chart_not_found' → chart_not_found
+    4. ChartBridgeProtocolError with 'auth_failed' → auth_failed
+    5. ChartBridgeError (base, pipe connect failure) → service_unavailable
+    """
+    error_message = str(error)
+    if isinstance(error, ChartBridgeTimeoutError):
+        code = "timeout"
+    elif isinstance(error, ChartBridgeProtocolError):
+        msg_lower = error_message.lower()
+        if "not verified" in msg_lower:
+            code = "verify_failed"
+        elif "chart_not_found" in error_message:
+            code = "chart_not_found"
+        elif "auth_failed" in error_message:
+            code = "auth_failed"
+        else:
+            code = "service_unavailable"
+    else:
+        code = "service_unavailable"
+    return {"status": "error", "error_code": code, "error_message": error_message}
+
+
+def _validate_iso_time(time_str: str | None) -> bool:
+    """Return True when time_str is a valid ISO-8601 datetime string."""
+    if not time_str:
+        return False
+    # Normalise the Z suffix so datetime.fromisoformat handles it on Python 3.11+
+    normalised = time_str.replace("Z", "+00:00") if time_str.endswith("Z") else time_str
+    try:
+        datetime.fromisoformat(normalised)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _invalid_params(message: str) -> dict[str, object]:
+    return {"status": "error", "error_code": "invalid_params", "error_message": message}
+
+
+def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient) -> None:
+    """Register the 9 chart drawing tools on the given FastMCP instance (REQ-1 to REQ-3).
+
+    Tools are only registered when a ChartBridgeClient is provided; callers are
+    responsible for not calling this function when the bridge is disabled.
+    The function MUST NOT be called with a None client.
+    """
+
+    # ------------------------------------------------------------------ #
+    # Semantic tools (REQ-1)                                               #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool
+    def draw_sl_line(symbol: str, price: float, label: str = "SL") -> object:
+        """Draw a red stop-loss horizontal line on the chart for the given symbol."""
+        name = f"{_YUGEN_PREFIX}sl_{uuid4().hex}"
+        spec = ChartObjectSpec(
+            name=name,
+            object_type="HLINE",
+            properties={"color": "red", "style": "solid", "width": 1, "description": label},
+            points=(ChartObjectPoint(price=price),),
+        )
+        try:
+            chart_client.create_object(
+                chart=ChartSelector(symbol=symbol),
+                object_spec=spec,
+            )
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return {"name": name, "status": "ok"}
+
+    @mcp.tool
+    def draw_tp_line(symbol: str, price: float, label: str = "TP") -> object:
+        """Draw a green take-profit horizontal line on the chart for the given symbol."""
+        name = f"{_YUGEN_PREFIX}tp_{uuid4().hex}"
+        spec = ChartObjectSpec(
+            name=name,
+            object_type="HLINE",
+            properties={"color": "green", "style": "solid", "width": 1, "description": label},
+            points=(ChartObjectPoint(price=price),),
+        )
+        try:
+            chart_client.create_object(
+                chart=ChartSelector(symbol=symbol),
+                object_spec=spec,
+            )
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return {"name": name, "status": "ok"}
+
+    @mcp.tool
+    def draw_zone(
+        symbol: str,
+        price_low: float,
+        price_high: float,
+        label: str = "",
+    ) -> object:
+        """Draw a supply/demand zone rectangle between price_low and price_high."""
+        if price_low >= price_high:
+            return _invalid_params("price_low must be less than price_high")
+        name = f"{_YUGEN_PREFIX}zone_{uuid4().hex}"
+        spec = ChartObjectSpec(
+            name=name,
+            object_type="RECTANGLE",
+            properties={"description": label},
+            points=(
+                ChartObjectPoint(price=price_low),
+                ChartObjectPoint(price=price_high),
+            ),
+        )
+        try:
+            chart_client.create_object(
+                chart=ChartSelector(symbol=symbol),
+                object_spec=spec,
+            )
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return {"name": name, "status": "ok"}
+
+    @mcp.tool
+    def draw_trend_line(
+        symbol: str,
+        point1: dict[str, object] | None,
+        point2: dict[str, object] | None,
+        label: str = "",
+    ) -> object:
+        """Draw a trend line between two anchor points (each with time and price)."""
+        if not point1 or not point2:
+            return _invalid_params("both point1 and point2 are required")
+        t1: str | None = str(point1.get("time")) if point1.get("time") is not None else None
+        t2: str | None = str(point2.get("time")) if point2.get("time") is not None else None
+        if not _validate_iso_time(t1):
+            return _invalid_params(
+                f"point1.time must be a valid ISO-8601 UTC datetime; got {t1!r}"
+            )
+        if not _validate_iso_time(t2):
+            return _invalid_params(
+                f"point2.time must be a valid ISO-8601 UTC datetime; got {t2!r}"
+            )
+        name = f"{_YUGEN_PREFIX}trend_{uuid4().hex}"
+        spec = ChartObjectSpec(
+            name=name,
+            object_type="TREND",
+            properties={"description": label},
+            points=(
+                ChartObjectPoint(time=t1, price=float(cast(float, point1.get("price") or 0))),
+                ChartObjectPoint(time=t2, price=float(cast(float, point2.get("price") or 0))),
+            ),
+        )
+        try:
+            chart_client.create_object(
+                chart=ChartSelector(symbol=symbol),
+                object_spec=spec,
+            )
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return {"name": name, "status": "ok"}
+
+    @mcp.tool
+    def annotate_text(symbol: str, time: str, price: float, text: str) -> object:
+        """Place a text annotation at the given time/price anchor on the chart."""
+        if not text or not text.strip():
+            return _invalid_params("text must be non-empty")
+        if not _validate_iso_time(time):
+            return _invalid_params(f"time must be a valid ISO-8601 UTC datetime; got {time!r}")
+        name = f"{_YUGEN_PREFIX}text_{uuid4().hex}"
+        spec = ChartObjectSpec(
+            name=name,
+            object_type="TEXT",
+            properties={"text": text},
+            points=(ChartObjectPoint(time=time, price=price),),
+        )
+        try:
+            chart_client.create_object(
+                chart=ChartSelector(symbol=symbol),
+                object_spec=spec,
+            )
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return {"name": name, "status": "ok"}
+
+    # ------------------------------------------------------------------ #
+    # Generic escape-hatch (REQ-2)                                         #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool
+    def draw_object(
+        object_type: str,
+        properties: dict[str, object],
+        points: list[dict[str, object]],
+        symbol: str | None = None,
+        chart_id: int | None = None,
+    ) -> object:
+        """Generic pass-through to draw any MQL5 object type. Name is always yugen_obj_* prefixed.
+
+        Ownership: the generated name is always ``yugen_obj_<uuid>`` so the safety boundary
+        holds even on the generic path.
+        """
+        if not object_type or not object_type.strip():
+            return _invalid_params("object_type must be non-empty")
+        if not points:
+            return _invalid_params("points must contain at least one element")
+        if symbol is None and chart_id is None:
+            return _invalid_params("provide symbol or chart_id to identify the target chart")
+        name = f"{_YUGEN_PREFIX}obj_{uuid4().hex}"
+        obj_points = tuple(
+            ChartObjectPoint(
+                time=str(p.get("time")) if p.get("time") is not None else None,
+                price=(
+                    float(cast(float, p["price"]))
+                    if "price" in p and p["price"] is not None
+                    else None
+                ),
+                index=(
+                    int(cast(int, p["index"]))
+                    if "index" in p and p["index"] is not None
+                    else None
+                ),
+            )
+            for p in points
+        )
+        spec = ChartObjectSpec(
+            name=name,
+            object_type=object_type,
+            properties=properties,
+            points=obj_points,
+        )
+        selector = ChartSelector(symbol=symbol, chart_id=chart_id)
+        try:
+            chart_client.create_object(chart=selector, object_spec=spec)
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return {"name": name, "status": "ok"}
+
+    # ------------------------------------------------------------------ #
+    # Management tools (REQ-3)                                             #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool
+    def list_charts() -> object:
+        """Return all currently open MT5 charts (platform query — no yugen filter)."""
+        try:
+            charts = chart_client.list_charts()
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return [
+            {"chart_id": c.chart_id, "symbol": c.symbol, "timeframe": c.timeframe}
+            for c in charts
+        ]
+
+    @mcp.tool
+    def delete_chart_object(name: str, symbol: str | None = None) -> object:
+        """Delete a single chart object. Only yugen_* objects may be deleted (REQ-4.3)."""
+        if not name.startswith(_YUGEN_PREFIX):
+            return {
+                "status": "error",
+                "error_code": "ownership_violation",
+                "error_message": "Only yugen_* objects may be deleted",
+            }
+        selector = ChartSelector(symbol=symbol) if symbol else ChartSelector(symbol="*")
+        try:
+            chart_client.delete_object(chart=selector, object_name=name)
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return {"name": name, "status": "ok"}
+
+    @mcp.tool
+    def clear_yugen_objects(symbol: str | None = None) -> object:
+        """Delete all yugen_* objects on the specified chart, or all open charts if omitted."""
+        try:
+            result = chart_client.clear_objects(symbol=symbol)
+        except ChartBridgeError as error:
+            return _chart_error_response(error)
+        return result
 
 
 def register_market_data_tools(mcp: FastMCP, market_data: MarketDataService) -> None:
@@ -383,6 +694,7 @@ def create_server(
     bulk_service: BulkTradeService | None = None,
     session_store: SessionRiskStore | None = None,
     config: AppConfig | None = None,
+    chart_client: ChartBridgeClient | None = None,
 ) -> FastMCP:
     mcp = FastMCP(name="Yugen MT5 MCP")
     register_market_data_tools(mcp, market_data)
@@ -401,4 +713,6 @@ def create_server(
             session_store=session_store,
             config=config,
         )
+    if chart_client is not None:
+        register_chart_tools(mcp, chart_client)
     return mcp

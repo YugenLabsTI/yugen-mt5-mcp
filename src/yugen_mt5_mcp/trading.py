@@ -95,6 +95,7 @@ class TradingService:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         comment: str | None = None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
@@ -126,6 +127,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def close_position(
@@ -136,6 +138,7 @@ class TradingService:
         symbol: str,
         volume: Decimal,
         ticket: int | None = None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
@@ -172,6 +175,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def modify_position_levels(
@@ -183,6 +187,7 @@ class TradingService:
         ticket: int,
         stop_loss: float | None,
         take_profit: float | None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
@@ -211,6 +216,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def _execute_trade(
@@ -219,6 +225,7 @@ class TradingService:
         approval: RiskApproval,
         idempotency_key: str,
         request: Mapping[str, object],
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         self._ensure_idempotency_key(idempotency_key)
         duplicate = self._executed_requests.get(idempotency_key)
@@ -238,6 +245,22 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
         )
+
+        # --- dry-run branch: validate only, do NOT send or cache ---
+        if dry_run:
+            return ExecutedTrade(
+                idempotency_key=idempotency_key,
+                action=approval.action.value,
+                symbol=approval.symbol,
+                requested_volume=approval.volume,
+                retcode=check_result.retcode,
+                order=0,
+                deal=0,
+                executed_volume=check_result.volume,
+                executed_price=check_result.price,
+                comment=check_result.comment,
+                dry_run=True,
+            )
 
         trade_result = self._adapter.send_trade(request)
         self._ensure_success_retcode(
@@ -361,6 +384,7 @@ class TradingService:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         comment: str | None = None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
@@ -390,6 +414,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def modify_pending_order(
@@ -402,6 +427,7 @@ class TradingService:
         price: float | None = None,
         stop_loss: float | None = None,
         take_profit: float | None = None,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         orders = self._adapter.list_orders(symbol)
@@ -428,6 +454,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def cancel_pending_order(
@@ -437,6 +464,7 @@ class TradingService:
         idempotency_key: str,
         ticket: int,
         symbol: str,
+        dry_run: bool = False,
     ) -> ExecutedTrade:
         account = self._adapter.get_account()
         orders = self._adapter.list_orders(symbol)
@@ -460,6 +488,7 @@ class TradingService:
             approval=approval,
             idempotency_key=idempotency_key,
             request=request,
+            dry_run=dry_run,
         )
 
     def _order_type_for_side(self, side: TradeSide) -> int:

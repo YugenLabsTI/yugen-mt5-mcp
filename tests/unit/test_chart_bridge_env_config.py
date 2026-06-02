@@ -4,8 +4,9 @@ Covers:
 - Returns None when YUGEN_MT5_CHART_SHARED_SECRET is unset or blank.
 - Returns a valid ChartBridgeConfig when the secret is present.
 - Raises ConfigError on non-positive or non-numeric timeout.
-- build_runtime emits chart_bridge_disabled warning when secret is unset.
+- build_runtime does NOT emit chart_bridge_disabled warning when secret is unset (opt-in feature).
 - build_runtime does NOT emit the warning when secret is present.
+- Doctor status is OK when bridge is disabled (disabled is the normal/default state).
 - Importing app.py on Linux does NOT crash (no PipeTransport instantiation at startup).
 """
 
@@ -26,7 +27,7 @@ from yugen_mt5_mcp.app import (
 )
 from yugen_mt5_mcp.chart_bridge import ChartBridgeConfig
 from yugen_mt5_mcp.config import ConfigError
-from yugen_mt5_mcp.doctor import DoctorService
+from yugen_mt5_mcp.doctor import DoctorService, DoctorStatus
 from yugen_mt5_mcp.market_data import MarketDataService
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
 
@@ -159,8 +160,8 @@ class TestParseChartBridgeConfig:
 
 
 class TestBuildRuntimeChartBridgeWarning:
-    def test_emits_disabled_warning_when_secret_unset(self, tmp_path: Path) -> None:
-        """build_runtime emits chart_bridge_disabled warning when secret is absent."""
+    def test_no_disabled_warning_when_secret_unset(self, tmp_path: Path) -> None:
+        """Disabled bridge is opt-in normal state — must NOT produce a startup warning."""
         runtime = build_runtime(
             env={},
             audit_path=tmp_path / "audit.sqlite3",
@@ -169,8 +170,10 @@ class TestBuildRuntimeChartBridgeWarning:
         )
 
         disabled_warnings = [w for w in runtime.warnings if w.code == "chart_bridge_disabled"]
-        assert len(disabled_warnings) == 1
-        assert "YUGEN_MT5_CHART_SHARED_SECRET" in disabled_warnings[0].message
+        assert disabled_warnings == [], (
+            "chart_bridge_disabled warning must not be emitted: "
+            "the chart bridge is opt-in; its absence is the normal default state"
+        )
 
     def test_does_not_emit_disabled_warning_when_secret_is_set(self, tmp_path: Path) -> None:
         """build_runtime does NOT emit chart_bridge_disabled when bridge is enabled."""
@@ -205,3 +208,57 @@ class TestBuildRuntimeChartBridgeWarning:
         config = parse_chart_bridge_config({CHART_SHARED_SECRET_ENV: "s3cr3t"})
         assert isinstance(config, ChartBridgeConfig)
         # No transport is ever constructed here — we just return the config object.
+
+
+# ---------------------------------------------------------------------------
+# Doctor status — chart bridge disabled must NOT degrade to WARN
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorStatusWhenBridgeDisabled:
+    def test_doctor_status_ok_when_bridge_disabled_all_else_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Default build (no secret, no risk anomalies) → doctor status must be OK.
+
+        The chart bridge is an opt-in feature. Its normal 'off' state must not
+        degrade the overall doctor status to WARN — only genuine anomalies
+        (invalid config, unlimited risk limits, wildcard symbols) should do that.
+        """
+        captured_doctor: DoctorService | None = None
+
+        def capturing_server_factory(
+            market_data: MarketDataService, doctor_service: DoctorService
+        ) -> _FakeServer:
+            nonlocal captured_doctor
+            captured_doctor = doctor_service
+            return _FakeServer()
+
+        build_runtime(
+            env={},
+            audit_path=tmp_path / "audit.sqlite3",
+            adapter_factory=_adapter_factory,
+            server_factory=capturing_server_factory,
+        )
+
+        assert captured_doctor is not None
+        report = captured_doctor.run()
+        assert report.status is DoctorStatus.OK, (
+            f"Expected DoctorStatus.OK but got {report.status!r}. "
+            f"Checks: {[(c.name, c.status) for c in report.checks]}"
+        )
+
+    def test_runtime_warnings_empty_when_bridge_disabled_all_else_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Default build with no secret → runtime.warnings must be empty (no anomalies)."""
+        runtime = build_runtime(
+            env={},
+            audit_path=tmp_path / "audit.sqlite3",
+            adapter_factory=_adapter_factory,
+            server_factory=_fake_server_factory,
+        )
+
+        assert runtime.warnings == (), (
+            f"Expected no warnings but got: {runtime.warnings}"
+        )

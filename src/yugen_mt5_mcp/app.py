@@ -214,17 +214,11 @@ def build_runtime(
     warnings += tuple(w for w in (exposure_warning, order_volume_warning) if w is not None)
 
     # Chart bridge — disabled when YUGEN_MT5_CHART_SHARED_SECRET is not set.
-    # parse_chart_bridge_config raises ConfigError at startup for invalid timeout.
-    chart_bridge_config = parse_chart_bridge_config(runtime_env)
-    if chart_bridge_config is None:
-        warnings += (
-            EntrypointWarning(
-                code="chart_bridge_disabled",
-                message=(
-                    f"{CHART_SHARED_SECRET_ENV} not set — chart drawing tools are disabled"
-                ),
-            ),
-        )
+    # Disabled is the normal default state for this opt-in feature; no warning is
+    # emitted. parse_chart_bridge_config raises ConfigError at startup for invalid
+    # timeout when the secret IS set. Slice C2 will consume this config to wire
+    # ChartBridgeClient into create_server.
+    _chart_bridge_config = parse_chart_bridge_config(runtime_env)
 
     config = AppConfig(
         audit=AuditConfig(database_path=resolved_audit_path),

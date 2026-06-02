@@ -101,6 +101,33 @@ def test_build_runtime_injected_server_factory_receives_market_data_and_doctor_s
     assert runtime.warnings == ()
 
 
+def test_build_runtime_parses_live_trading_env_flags_as_true_false(
+    tmp_path: Path,
+) -> None:
+    created_configs: list[AppConfig] = []
+
+    def adapter_factory() -> MT5Adapter:
+        return MT5Adapter(backend=FakeMT5Backend())
+
+    def server_factory(market_data: MarketDataService, doctor_service: DoctorService) -> FakeServer:
+        created_configs.append(market_data._config)
+        assert doctor_service.run().status is DoctorStatus.OK
+        return FakeServer()
+
+    build_runtime(
+        env={
+            "YUGEN_MT5_ALLOW_LIVE_TRADING": "true",
+            "YUGEN_MT5_ALLOW_REAL_ACCOUNTS": "false",
+        },
+        audit_path=tmp_path / "audit.sqlite3",
+        adapter_factory=adapter_factory,
+        server_factory=server_factory,
+    )
+
+    assert created_configs[0].risk.allow_live_trading is True
+    assert created_configs[0].risk.allow_real_accounts is False
+
+
 def test_build_runtime_default_factory_wires_doctor_dependencies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

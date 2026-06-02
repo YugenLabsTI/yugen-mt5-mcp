@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 from tests.fakes.fake_mt5 import FakeMT5Backend
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
 
-
 # ---------------------------------------------------------------------------
 # WU3-T1: FakeMT5Backend list_positions includes new fields (PS-1-a)
 # ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 """WU4 — Pending order service methods (TDD: write all RED tests first)."""
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -170,7 +169,10 @@ def test_place_pending_order_risk_rejection(tmp_path: Path) -> None:
 
     # No MT5 send should have been called
     # (order_check/send not called for risk-rejected path)
-    send_calls = [r for r in backend.order_requests if r.get("action") == backend.TRADE_ACTION_PENDING]
+    send_calls = [
+        r for r in backend.order_requests
+        if r.get("action") == backend.TRADE_ACTION_PENDING
+    ]
     assert len(send_calls) == 0
 
 

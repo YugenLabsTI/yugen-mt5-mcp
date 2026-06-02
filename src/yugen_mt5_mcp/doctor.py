@@ -1,7 +1,9 @@
 """Passive doctor diagnostics primitives and default readiness checks.
 
-This module only performs read-only validation. Checks must not place orders,
-mutate account state, or write audit events while producing diagnostics.
+This module only performs read-only validation. Doctor checks are diagnostic
+observers, not remediation hooks: they must not place orders, reconnect or
+repair state on the caller's behalf, mutate account/runtime state, or create
+audit directories, SQLite files, or audit rows while producing diagnostics.
 """
 
 from __future__ import annotations
@@ -118,9 +120,7 @@ def create_default_doctor(
             _CallableDoctorCheck("read_tools", lambda: _check_read_tools(read_tool_names)),
         ),
     )
-    return DoctorService(
-        checks=checks
-    )
+    return DoctorService(checks=checks)
 
 
 @dataclass(slots=True, frozen=True)

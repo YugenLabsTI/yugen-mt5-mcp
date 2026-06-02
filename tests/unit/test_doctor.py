@@ -150,3 +150,51 @@ def test_create_default_doctor_reports_invalid_audit_parent(tmp_path: Path) -> N
 
     assert checks["audit_path"].status is DoctorStatus.FAIL
     assert checks["audit_path"].summary == "Audit path parent is not a directory."
+
+
+def test_doctor_run_does_not_create_audit_directories_or_database(tmp_path: Path) -> None:
+    audit_path = tmp_path / "missing" / "audit.sqlite3"
+
+    service = create_default_doctor(
+        config=AppConfig(),
+        audit_store=AuditStore(audit_path),
+        adapter=MT5Adapter(backend=FakeMT5Backend()),
+        read_tool_names=(
+            "list_symbols",
+            "get_tick",
+            "get_candles",
+            "get_account",
+            "list_positions",
+            "list_orders",
+            "get_history",
+        ),
+    )
+
+    report = service.run()
+
+    assert report.status is DoctorStatus.OK
+    assert not audit_path.parent.exists()
+    assert not audit_path.exists()
+
+
+def test_doctor_run_does_not_place_orders_when_checking_mt5_account(tmp_path: Path) -> None:
+    backend = FakeMT5Backend()
+    service = create_default_doctor(
+        config=AppConfig(),
+        audit_store=AuditStore(tmp_path / "audit.sqlite3"),
+        adapter=MT5Adapter(backend=backend),
+        read_tool_names=(
+            "list_symbols",
+            "get_tick",
+            "get_candles",
+            "get_account",
+            "list_positions",
+            "list_orders",
+            "get_history",
+        ),
+    )
+
+    report = service.run()
+
+    assert report.status is DoctorStatus.OK
+    assert backend.order_requests == []

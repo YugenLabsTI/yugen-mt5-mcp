@@ -133,9 +133,10 @@ class FakeMT5Backend:
         self.initialized = False
         self.shutdown_called = False
         self._last_error: tuple[int, str] = (0, "OK")
+        # Real MT5 order_check() returns retcode 0 / comment "Done" on success.
         self.order_check_result = FakeMT5TradeResult(
-            retcode=self.TRADE_RETCODE_DONE,
-            comment="check ok",
+            retcode=0,
+            comment="Done",
             volume=0.0,
             price=0.0,
         )

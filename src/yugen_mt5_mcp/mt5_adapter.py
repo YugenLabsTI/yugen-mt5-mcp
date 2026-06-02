@@ -87,6 +87,14 @@ class PositionSnapshot:
     price_open: float
     profit: float
     account_mode: AccountMode
+    sl: float = 0.0
+    tp: float = 0.0
+    price_current: float = 0.0
+    swap: float = 0.0
+    commission: float = 0.0
+    time: datetime = datetime(1970, 1, 1, tzinfo=UTC)
+    magic: int = 0
+    comment: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -317,6 +325,14 @@ class MT5Adapter:
                 price_open=_as_float(row, "price_open"),
                 profit=_as_float(row, "profit"),
                 account_mode=account_mode,
+                sl=_as_float(row, "sl"),
+                tp=_as_float(row, "tp"),
+                price_current=_as_float(row, "price_current"),
+                swap=_as_float(row, "swap"),
+                commission=self._guarded_float(row, "commission"),
+                time=_as_datetime(_get_attr(row, "time")),
+                magic=int(_get_attr(row, "magic")),
+                comment=str(_get_attr(row, "comment")),
             )
             for row in rows
         ]
@@ -499,6 +515,13 @@ class MT5Adapter:
         if result is True:
             return True
         raise self._backend_error(f"MT5 returned non-boolean result for {operation}")
+
+    def _guarded_float(self, payload: object, key: str, fallback: float = 0.0) -> float:
+        """Read a float attribute that may be absent on some MT5 builds (e.g. commission)."""
+        try:
+            return _as_float(payload, key)
+        except (AttributeError, KeyError, TypeError):
+            return fallback
 
     def _backend_error(self, message: str, *, operation: str | None = None) -> MT5AdapterError:
         code, detail = self._backend.last_error()

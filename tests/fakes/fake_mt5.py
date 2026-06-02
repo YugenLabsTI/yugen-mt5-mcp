@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
+
+_FAKE_TS = int(datetime(2024, 1, 1, 12, 0, tzinfo=UTC).timestamp())
 
 
 @dataclass(slots=True)
@@ -44,6 +46,14 @@ class FakeMT5Position:
     type: int
     price_open: float
     profit: float
+    sl: float = 0.0
+    tp: float = 0.0
+    price_current: float = 0.0
+    swap: float = 0.0
+    commission: float = 0.0
+    time: int = field(default_factory=lambda: _FAKE_TS)
+    magic: int = 0
+    comment: str = ""
 
 
 @dataclass(slots=True)
@@ -182,6 +192,7 @@ class FakeMT5Backend:
                 type=0,
                 price_open=1.095,
                 profit=25.0,
+                price_current=1.095,
             )
         ]
         self.orders = [
@@ -324,14 +335,20 @@ class FakeMT5Backend:
         position_ticket = request.get("position")
         if position_ticket is None:
             new_ticket = max((position.ticket for position in self.positions), default=1000) + 1
+            price = float(cast(float | int | str, request.get("price", 0.0)))
+            sl = float(cast(float | int | str, request.get("sl", 0.0)))
+            tp = float(cast(float | int | str, request.get("tp", 0.0)))
             self.positions.append(
                 FakeMT5Position(
                     ticket=new_ticket,
                     symbol=symbol,
                     volume=volume,
                     type=order_type,
-                    price_open=float(cast(float | int | str, request.get("price", 0.0))),
+                    price_open=price,
                     profit=0.0,
+                    sl=sl,
+                    tp=tp,
+                    price_current=price,
                 )
             )
             return
@@ -351,5 +368,13 @@ class FakeMT5Backend:
                     type=position.type,
                     price_open=position.price_open,
                     profit=position.profit,
+                    sl=position.sl,
+                    tp=position.tp,
+                    price_current=position.price_current,
+                    swap=position.swap,
+                    commission=position.commission,
+                    time=position.time,
+                    magic=position.magic,
+                    comment=position.comment,
                 )
             return

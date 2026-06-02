@@ -61,7 +61,7 @@ def test_parse_allowed_symbols_accepts_wildcard_with_warning() -> None:
     assert warnings == (
         EntrypointWarning(
             code="allowed_symbols_wildcard",
-            message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+            message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
         ),
     )
 
@@ -225,7 +225,7 @@ def test_build_runtime_passes_wildcard_warning_into_doctor(
     assert runtime.warnings == (
         EntrypointWarning(
             code="allowed_symbols_wildcard",
-            message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+            message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
         ),
     )
     assert captured_warnings == runtime.warnings
@@ -270,7 +270,7 @@ def test_emit_warnings_writes_to_error_stream() -> None:
         (
             EntrypointWarning(
                 code="allowed_symbols_wildcard",
-                message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+                message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
             ),
         ),
         stream=stream,
@@ -278,7 +278,7 @@ def test_emit_warnings_writes_to_error_stream() -> None:
 
     assert stream.getvalue() == (
         "WARNING [allowed_symbols_wildcard]: "
-        "YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools\n"
+        "YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading\n"
     )
 
 

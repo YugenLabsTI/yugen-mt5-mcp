@@ -96,14 +96,20 @@ class RiskPolicy:
         return approval
 
     def resolve_symbol(self, symbol: str) -> str:
-        """Return the configured canonical symbol casing for a trading request."""
+        """Return the risk-approved symbol value for a trading request."""
         return self._validate_symbol(symbol)
+
+    def allows_all_symbols(self) -> bool:
+        """Return True when the configured symbol allowlist is a wildcard."""
+        return self._config.risk.allowed_symbols == ("*",)
 
     def _validate_symbol(self, symbol: str) -> str:
         requested = symbol.strip()
         if not requested:
             raise RiskPolicyError("symbol is required")
         allowed_symbols = self._config.risk.allowed_symbols
+        if allowed_symbols == ("*",):
+            return requested
         if allowed_symbols:
             for allowed_symbol in allowed_symbols:
                 if requested.casefold() == allowed_symbol.casefold():

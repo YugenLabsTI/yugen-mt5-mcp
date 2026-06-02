@@ -135,8 +135,6 @@ class HistoryOrderSnapshot:
 class TradeCheckResult:
     retcode: int
     comment: str
-    volume: float
-    price: float
 
 
 @dataclass(slots=True, frozen=True)
@@ -454,8 +452,6 @@ class MT5Adapter:
         return TradeCheckResult(
             retcode=int(_get_attr(row, "retcode")),
             comment=str(_get_attr(row, "comment")),
-            volume=_as_float(row, "volume"),
-            price=_as_float(row, "price"),
         )
 
     def send_trade(self, request: Mapping[str, object]) -> TradeResult:

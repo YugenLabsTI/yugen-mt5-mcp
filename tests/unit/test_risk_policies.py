@@ -184,6 +184,92 @@ def test_unlimited_symbol_exposure_allows_excess(tmp_path: Path) -> None:
     assert approval.symbol == "EURUSD"
 
 
+def _risk_request(
+    adapter: MT5Adapter, *, action: TradeAction, volume: Decimal
+) -> RiskCheckRequest:
+    return RiskCheckRequest(
+        session_id="session-1",
+        actor="agent:test",
+        action=action,
+        symbol="EURUSD",
+        volume=volume,
+        account=adapter.get_account(),
+        positions=adapter.list_positions("EURUSD"),
+    )
+
+
+def _exposure_creating_policy(tmp_path: Path) -> tuple[RiskPolicy, MT5Adapter]:
+    policy, adapter, _, _ = build_policy(
+        tmp_path,
+        risk_config=RiskConfig(
+            allowed_symbols=("EURUSD",),
+            allowed_account_modes=("hedging",),
+            allow_live_trading=True,
+            max_order_volume=Decimal("0.10"),
+            max_symbol_exposure=None,
+        ),
+    )
+    return policy, adapter
+
+
+def test_max_order_volume_does_not_block_closing(tmp_path: Path) -> None:
+    """Reducing risk must never be blocked by the per-order entry cap."""
+    policy, adapter = _exposure_creating_policy(tmp_path)
+
+    approval = policy.validate(
+        _risk_request(adapter, action=TradeAction.CLOSE, volume=Decimal("5.0"))
+    )
+
+    assert approval.action is TradeAction.CLOSE
+
+
+def test_max_order_volume_does_not_block_modify(tmp_path: Path) -> None:
+    """Adjusting SL/TP on a large position must not be blocked by the entry cap."""
+    policy, adapter = _exposure_creating_policy(tmp_path)
+
+    approval = policy.validate(
+        _risk_request(adapter, action=TradeAction.MODIFY, volume=Decimal("5.0"))
+    )
+
+    assert approval.action is TradeAction.MODIFY
+
+
+def test_max_order_volume_does_not_block_cancel(tmp_path: Path) -> None:
+    policy, adapter = _exposure_creating_policy(tmp_path)
+
+    approval = policy.validate(
+        _risk_request(adapter, action=TradeAction.CANCEL_PENDING, volume=Decimal("5.0"))
+    )
+
+    assert approval.action is TradeAction.CANCEL_PENDING
+
+
+def test_max_order_volume_still_blocks_open(tmp_path: Path) -> None:
+    """Regression: opening above the cap is still rejected."""
+    policy, adapter = _exposure_creating_policy(tmp_path)
+
+    with pytest.raises(RiskPolicyError, match="max_order_volume"):
+        policy.validate(_risk_request(adapter, action=TradeAction.OPEN, volume=Decimal("5.0")))
+
+
+def test_max_order_volume_still_blocks_place_pending(tmp_path: Path) -> None:
+    """Pending orders create new exposure, so the cap still applies."""
+    policy, adapter = _exposure_creating_policy(tmp_path)
+
+    with pytest.raises(RiskPolicyError, match="max_order_volume"):
+        policy.validate(
+            _risk_request(adapter, action=TradeAction.PLACE_PENDING, volume=Decimal("5.0"))
+        )
+
+
+def test_closing_still_rejects_nonpositive_volume(tmp_path: Path) -> None:
+    """The positive-volume sanity guard still applies to every action."""
+    policy, adapter = _exposure_creating_policy(tmp_path)
+
+    with pytest.raises(RiskPolicyError, match="greater than zero"):
+        policy.validate(_risk_request(adapter, action=TradeAction.CLOSE, volume=Decimal("0")))
+
+
 def test_finite_order_volume_limit_is_enforced_at_boundary(tmp_path: Path) -> None:
     """A custom finite max_order_volume rejects above it and allows the boundary."""
     policy, adapter, _, _ = build_policy(

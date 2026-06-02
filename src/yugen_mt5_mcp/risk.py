@@ -23,6 +23,12 @@ class TradeAction(StrEnum):
     CANCEL_PENDING = "cancel_pending"
 
 
+# Actions that establish new market exposure. The per-order volume cap exists to
+# limit the size of NEW positions (fat-finger protection); it must never block
+# reducing risk (CLOSE), adjusting protection (MODIFY), or cancelling.
+_EXPOSURE_CREATING_ACTIONS = frozenset({TradeAction.OPEN, TradeAction.PLACE_PENDING})
+
+
 class RiskPolicyError(ValueError):
     """Raised when a trade request violates configured policy."""
 
@@ -69,7 +75,9 @@ class RiskPolicy:
             self._validate_live_trading(request.account)
             self._validate_account_mode(request.account)
             self._validate_trading_window()
-            self._validate_volume(request.volume)
+            self._validate_positive_volume(request.volume)
+            if request.action in _EXPOSURE_CREATING_ACTIONS:
+                self._validate_max_order_volume(request.volume)
             if request.action is TradeAction.OPEN:
                 self._validate_exposure(request.positions, request.volume)
             if request.destructive and request.account.trade_mode is AccountTradeMode.REAL:
@@ -148,9 +156,11 @@ class RiskPolicy:
             return start <= current <= end
         return current >= start or current <= end
 
-    def _validate_volume(self, volume: Decimal) -> None:
+    def _validate_positive_volume(self, volume: Decimal) -> None:
         if volume <= 0:
             raise RiskPolicyError("volume must be greater than zero")
+
+    def _validate_max_order_volume(self, volume: Decimal) -> None:
         max_order_volume = self._config.risk.max_order_volume
         if max_order_volume is not None and volume > max_order_volume:
             raise RiskPolicyError("volume exceeds configured max_order_volume")

@@ -68,6 +68,39 @@ def test_hedging_partial_close_targets_ticket_and_is_idempotent(tmp_path: Path) 
     assert len(backend.order_requests) == 2
 
 
+def test_close_above_max_order_volume_succeeds_end_to_end(tmp_path: Path) -> None:
+    """A full close of a position larger than max_order_volume must succeed.
+
+    Regression for the manual-QA bug: closing 19 lots with the cap at 5 was
+    wrongly rejected. The cap applies to entries only, so a large close goes
+    through close_position in one order.
+    """
+    service, backend, _, _ = build_trading_service(
+        tmp_path,
+        risk_config=RiskConfig(
+            allowed_symbols=("EURUSD",),
+            allowed_account_modes=("hedging", "netting"),
+            max_order_volume=Decimal("0.10"),
+            max_symbol_exposure=Decimal("2.00"),
+            allow_live_trading=True,
+            allow_real_accounts=True,
+        ),
+    )
+
+    # The seeded hedging position (ticket 1001) holds 0.20 lots — twice the cap.
+    executed = service.close_position(
+        session_id="session-1",
+        idempotency_key="close-above-cap",
+        symbol="EURUSD",
+        ticket=1001,
+        volume=Decimal("0.20"),
+    )
+
+    assert executed.executed_volume == pytest.approx(0.20)
+    # A full close removes the position entirely from the book.
+    assert all(position.ticket != 1001 for position in backend.positions)
+
+
 def test_netting_close_rejects_ticket_mismatch(tmp_path: Path) -> None:
     backend = FakeMT5Backend()
     backend.account.margin_mode = backend.ACCOUNT_MARGIN_MODE_RETAIL_NETTING

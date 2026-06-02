@@ -255,6 +255,12 @@ class TradingService:
 
         # --- dry-run branch: validate only, do NOT send or cache ---
         if dry_run:
+            requested_price = request.get("price", 0.0)
+            executed_price = (
+                float(requested_price)
+                if isinstance(requested_price, int | float | str)
+                else 0.0
+            )
             return ExecutedTrade(
                 idempotency_key=idempotency_key,
                 action=approval.action.value,
@@ -263,8 +269,8 @@ class TradingService:
                 retcode=check_result.retcode,
                 order=0,
                 deal=0,
-                executed_volume=check_result.volume,
-                executed_price=check_result.price,
+                executed_volume=float(approval.volume),
+                executed_price=executed_price,
                 comment=check_result.comment,
                 dry_run=True,
             )

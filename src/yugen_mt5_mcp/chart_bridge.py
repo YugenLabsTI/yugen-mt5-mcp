@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import hmac
-import ipaddress
 import json
-import socket
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import sha256
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 from uuid import uuid4
 
 from .audit import AuditEvent, AuditStore
@@ -37,27 +35,52 @@ class ChartBridgeAction(StrEnum):
     DELETE_OBJECT = "delete_object"
 
 
+# ---------------------------------------------------------------------------
+# Transport port (A-1)
+# ---------------------------------------------------------------------------
+
+@runtime_checkable
+class ChartBridgeTransport(Protocol):
+    """Single-call transport seam: one request line out, one response line in.
+
+    Raises:
+        ChartBridgeTimeoutError: when the deadline is exceeded.
+        ChartBridgeError: when the connection cannot be established.
+    """
+
+    def exchange(self, request_line: bytes, *, timeout_seconds: float) -> bytes:
+        """Send one newline-terminated request; return one response line (newline stripped)."""
+        ...  # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# Config — pipe_name replaces host/port (A-4)
+# ---------------------------------------------------------------------------
+
 @dataclass(slots=True, frozen=True)
 class ChartBridgeConfig:
-    host: str = "127.0.0.1"
-    port: int = 18888
+    pipe_name: str = "yugen_chart_bridge"
     shared_secret: str = ""
     timeout_seconds: float = 1.0
 
     def validate(self) -> None:
-        try:
-            address = ipaddress.ip_address(self.host)
-        except ValueError as error:
-            raise ValueError("chart bridge host must be a literal IP address") from error
-        if not address.is_loopback:
-            raise ValueError("chart bridge host must be a loopback address")
-        if not 1 <= self.port <= 65535:
-            raise ValueError("chart bridge port must be between 1 and 65535")
+        stripped_name = self.pipe_name.strip()
+        if not stripped_name:
+            raise ValueError("chart bridge pipe_name must not be empty")
+        if "\\" in stripped_name or "/" in stripped_name:
+            raise ValueError(
+                "chart bridge pipe_name must be a bare name (no path separators); "
+                "the transport prepends the UNC prefix automatically"
+            )
         if not self.shared_secret.strip():
             raise ValueError("chart bridge shared_secret is required")
         if self.timeout_seconds <= 0:
             raise ValueError("chart bridge timeout_seconds must be positive")
 
+
+# ---------------------------------------------------------------------------
+# Domain model (unchanged)
+# ---------------------------------------------------------------------------
 
 @dataclass(slots=True, frozen=True)
 class ChartSelector:
@@ -137,6 +160,10 @@ class ChartBridgeAck:
     observed_properties: Mapping[str, object] = field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# HMAC auth tag (unchanged behavior, frozen spec)
+# ---------------------------------------------------------------------------
+
 def build_auth_tag(
     *,
     shared_secret: str,
@@ -150,6 +177,10 @@ def build_auth_tag(
     return digest.hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Client — transport-agnostic (A-2)
+# ---------------------------------------------------------------------------
+
 class ChartBridgeClient:
     def __init__(
         self,
@@ -157,11 +188,27 @@ class ChartBridgeClient:
         config: ChartBridgeConfig,
         audit_store: AuditStore,
         actor: str = "mcp.chart_bridge",
+        transport: ChartBridgeTransport | None = None,
     ) -> None:
         config.validate()
         self._config = config
         self._audit_store = audit_store
         self._actor = actor
+        self._transport = transport or self._default_transport()
+
+    def _default_transport(self) -> ChartBridgeTransport:
+        """Construct the default transport (PipeTransport on Windows, error on Linux)."""
+        import sys
+
+        if sys.platform != "win32":
+            raise ChartBridgeError(
+                "named pipe transport requires Windows; "
+                "on Linux/macOS inject a transport explicitly (e.g. FakeTransport for tests)"
+            )
+        # Import lazily so the module is importable on Linux without crashing.
+        from .pipe_transport import PipeTransport  # noqa: PLC0415
+
+        return PipeTransport(pipe_name=self._config.pipe_name)
 
     def list_charts(self) -> list[ChartDescriptor]:
         request_id = self._request_id()
@@ -313,20 +360,12 @@ class ChartBridgeClient:
         return payload
 
     def _round_trip(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        """Send one request line via the injected transport; parse the JSON response."""
         raw_request = (json.dumps(dict(payload), sort_keys=True) + "\n").encode("utf-8")
-        try:
-            with socket.create_connection(
-                (self._config.host, self._config.port),
-                timeout=self._config.timeout_seconds,
-            ) as connection:
-                connection.settimeout(self._config.timeout_seconds)
-                connection.sendall(raw_request)
-                raw_response = self._recv_line(connection)
-        except TimeoutError as error:
-            raise ChartBridgeTimeoutError("chart bridge request timed out") from error
-        except OSError as error:
-            raise ChartBridgeError(f"chart bridge connection failed: {error}") from error
-
+        # Transport raises ChartBridgeTimeoutError / ChartBridgeError on failure.
+        raw_response = self._transport.exchange(
+            raw_request, timeout_seconds=self._config.timeout_seconds
+        )
         try:
             response = json.loads(raw_response.decode("utf-8"))
         except json.JSONDecodeError as error:
@@ -334,23 +373,6 @@ class ChartBridgeClient:
         if not isinstance(response, dict):
             raise ChartBridgeProtocolError("chart bridge response must be a JSON object")
         return cast(Mapping[str, Any], response)
-
-    def _recv_line(self, connection: socket.socket) -> bytes:
-        chunks = bytearray()
-        while True:
-            try:
-                chunk = connection.recv(4096)
-            except TimeoutError as error:
-                raise ChartBridgeTimeoutError("chart bridge request timed out") from error
-            if not chunk:
-                if chunks:
-                    break
-                raise ChartBridgeProtocolError("chart bridge closed the connection before replying")
-            chunks.extend(chunk)
-            if b"\n" in chunk:
-                break
-        line, *_ = bytes(chunks).split(b"\n", 1)
-        return line
 
     def _parse_chart_descriptor(self, payload: object) -> ChartDescriptor:
         if not isinstance(payload, Mapping):

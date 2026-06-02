@@ -280,7 +280,14 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
         "audit_path",
         "mt5_account",
         "read_tools",
+        "runtime_context",
     ]
+    assert checks[-1]["details"] == {
+        "transport_mode": "stdio",
+        "remote_enabled": False,
+        "allowed_symbols": ["EURUSD"],
+        "warnings": [],
+    }
 
 
 def test_get_history_returns_orders_and_deals(tmp_path: Path) -> None:

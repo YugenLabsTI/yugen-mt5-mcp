@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from .audit import AuditEvent, AuditStore
 from .mt5_adapter import (
@@ -43,6 +43,30 @@ class ExecutedTrade:
     executed_price: float
     comment: str
     duplicate: bool = False
+    applied_sl: float | None = None
+    applied_tp: float | None = None
+    deviation: int | None = None
+    position: int | None = None
+    dry_run: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class BulkItemResult:
+    ticket: int
+    symbol: str
+    status: Literal["executed", "failed", "skipped"]
+    executed: ExecutedTrade | None = None
+    error: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class BulkTradeResult:
+    action: str
+    requested: int
+    succeeded: int
+    failed: int
+    mode: Literal["best_effort", "fail_fast"]
+    items: list[BulkItemResult]
 
 
 class TradingService:

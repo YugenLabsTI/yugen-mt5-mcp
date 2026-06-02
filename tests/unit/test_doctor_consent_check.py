@@ -14,7 +14,6 @@ from yugen_mt5_mcp.doctor import (
 )
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
 
-
 # ---------------------------------------------------------------------------
 # WU8-T1: env-flag True → WARN status, severity=WARNING, message refs env-var
 # (CD-2-a)

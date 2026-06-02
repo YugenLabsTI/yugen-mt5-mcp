@@ -3,9 +3,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
-
-import pytest
 
 from tests.fakes.fake_mt5 import FakeMT5Backend
 from yugen_mt5_mcp.audit import AuditStore

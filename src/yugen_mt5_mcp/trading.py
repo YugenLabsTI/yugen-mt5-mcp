@@ -18,6 +18,10 @@ from .mt5_adapter import (
 )
 from .risk import RiskApproval, RiskCheckRequest, RiskPolicy, TradeAction
 
+_BULK_FILTER_ALL = "all"
+_BULK_FILTER_PROFITABLE = "profitable"
+_BULK_FILTER_LOSING = "losing"
+
 _SUCCESS_RETCODES = {10009, 10010}
 
 
@@ -593,5 +597,242 @@ class TradingService:
                 request_id=request_id,
                 decision=decision,
                 context=context,
+            )
+        )
+
+
+class BulkTradeService:
+    """Composes TradingService to execute bulk operations over positions/orders.
+
+    Best-effort mode (default): iterate all targets, collect per-item outcomes,
+    never stop early — failures are data, not exceptions.
+
+    Fail-fast mode: stop at the first failure; items processed before the
+    failure retain their executed state and appear in items; remaining items
+    have status="skipped".  Prior executions are NOT rolled back — caller must
+    be aware of partial-state risk.
+    """
+
+    def __init__(
+        self,
+        *,
+        trading_service: TradingService,
+        adapter: MT5Adapter,
+        audit_store: AuditStore,
+        actor: str = "mcp.trade.bulk",
+    ) -> None:
+        self._trading = trading_service
+        self._adapter = adapter
+        self._audit_store = audit_store
+        self._actor = actor
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def close_all(
+        self,
+        *,
+        session_id: str,
+        idempotency_key: str,
+        symbol: str | None = None,
+        filter: Literal["all", "profitable", "losing"] = "all",  # noqa: A002
+        mode: Literal["best_effort", "fail_fast"] = "best_effort",
+        dry_run: bool = False,
+        confirm: bool = False,
+    ) -> BulkTradeResult:
+        self._require_confirm(confirm)
+        positions = self._adapter.list_positions(symbol)
+        targets = self._apply_filter(positions, filter)
+        items = self._run_close_loop(
+            targets=targets,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+            dry_run=dry_run,
+            mode=mode,
+        )
+        result = self._build_result(action="close_all", mode=mode, items=items)
+        self._audit_bulk(idempotency_key=idempotency_key, result=result)
+        return result
+
+    def cancel_all_pending(
+        self,
+        *,
+        session_id: str,
+        idempotency_key: str,
+        symbol: str | None = None,
+        mode: Literal["best_effort", "fail_fast"] = "best_effort",
+        dry_run: bool = False,
+        confirm: bool = False,
+    ) -> BulkTradeResult:
+        self._require_confirm(confirm)
+        orders = self._adapter.list_orders(symbol)
+        items = self._run_cancel_loop(
+            orders=orders,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+            dry_run=dry_run,
+            mode=mode,
+        )
+        result = self._build_result(action="cancel_all_pending", mode=mode, items=items)
+        self._audit_bulk(idempotency_key=idempotency_key, result=result)
+        return result
+
+    # ------------------------------------------------------------------
+    # Internal loop helpers
+    # ------------------------------------------------------------------
+
+    def _run_close_loop(
+        self,
+        *,
+        targets: list[PositionSnapshot],
+        session_id: str,
+        idempotency_key: str,
+        dry_run: bool,
+        mode: Literal["best_effort", "fail_fast"],
+    ) -> list[BulkItemResult]:
+        items: list[BulkItemResult] = []
+        failed = False
+        for position in targets:
+            if failed:
+                items.append(
+                    BulkItemResult(ticket=position.ticket, symbol=position.symbol, status="skipped")
+                )
+                continue
+            sub_key = f"{idempotency_key}:{position.ticket}"
+            try:
+                executed = self._trading.close_position(
+                    session_id=session_id,
+                    idempotency_key=sub_key,
+                    symbol=position.symbol,
+                    volume=Decimal(str(position.volume)),
+                    ticket=position.ticket,
+                    dry_run=dry_run,
+                )
+                items.append(
+                    BulkItemResult(
+                        ticket=position.ticket,
+                        symbol=position.symbol,
+                        status="executed",
+                        executed=executed,
+                    )
+                )
+            except (TradingError, Exception) as exc:
+                items.append(
+                    BulkItemResult(
+                        ticket=position.ticket,
+                        symbol=position.symbol,
+                        status="failed",
+                        error=str(exc),
+                    )
+                )
+                if mode == "fail_fast":
+                    failed = True
+        return items
+
+    def _run_cancel_loop(
+        self,
+        *,
+        orders: list[Any],
+        session_id: str,
+        idempotency_key: str,
+        dry_run: bool,
+        mode: Literal["best_effort", "fail_fast"],
+    ) -> list[BulkItemResult]:
+        items: list[BulkItemResult] = []
+        failed = False
+        for order in orders:
+            if failed:
+                items.append(
+                    BulkItemResult(ticket=order.ticket, symbol=order.symbol, status="skipped")
+                )
+                continue
+            sub_key = f"{idempotency_key}:{order.ticket}"
+            try:
+                executed = self._trading.cancel_pending_order(
+                    session_id=session_id,
+                    idempotency_key=sub_key,
+                    ticket=order.ticket,
+                    symbol=order.symbol,
+                    dry_run=dry_run,
+                )
+                items.append(
+                    BulkItemResult(
+                        ticket=order.ticket,
+                        symbol=order.symbol,
+                        status="executed",
+                        executed=executed,
+                    )
+                )
+            except (TradingError, Exception) as exc:
+                items.append(
+                    BulkItemResult(
+                        ticket=order.ticket,
+                        symbol=order.symbol,
+                        status="failed",
+                        error=str(exc),
+                    )
+                )
+                if mode == "fail_fast":
+                    failed = True
+        return items
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _require_confirm(confirm: bool) -> None:
+        if not confirm:
+            raise TradingError(
+                "bulk operation requires confirm=True to prevent accidental mass execution"
+            )
+
+    @staticmethod
+    def _apply_filter(
+        positions: list[PositionSnapshot],
+        filter: Literal["all", "profitable", "losing"],  # noqa: A002
+    ) -> list[PositionSnapshot]:
+        if filter == _BULK_FILTER_PROFITABLE:
+            return [p for p in positions if p.profit > 0]
+        if filter == _BULK_FILTER_LOSING:
+            return [p for p in positions if p.profit < 0]
+        return list(positions)
+
+    @staticmethod
+    def _build_result(
+        *,
+        action: str,
+        mode: Literal["best_effort", "fail_fast"],
+        items: list[BulkItemResult],
+    ) -> BulkTradeResult:
+        succeeded = sum(1 for item in items if item.status == "executed")
+        failed = sum(1 for item in items if item.status == "failed")
+        return BulkTradeResult(
+            action=action,
+            requested=len(items),
+            succeeded=succeeded,
+            failed=failed,
+            mode=mode,
+            items=items,
+        )
+
+    def _audit_bulk(self, *, idempotency_key: str, result: BulkTradeResult) -> None:
+        from uuid import uuid4  # noqa: PLC0415
+
+        self._audit_store.append(
+            AuditEvent(
+                event_type="trade.bulk",
+                actor=self._actor,
+                request_id=f"bulk-{uuid4()}",
+                decision="completed",
+                context={
+                    "idempotency_key": idempotency_key,
+                    "action": result.action,
+                    "requested": result.requested,
+                    "succeeded": result.succeeded,
+                    "failed": result.failed,
+                    "mode": result.mode,
+                },
             )
         )

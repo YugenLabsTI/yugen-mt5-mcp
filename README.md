@@ -144,6 +144,27 @@ Keep the MCP process on a loopback or private bind. Caddy is the public edge; th
 | Volume / exposure limits | Checked before order submission. Configurable via `YUGEN_MT5_MAX_ORDER_VOLUME` / `YUGEN_MT5_MAX_SYMBOL_EXPOSURE` (default `1.0`; `unlimited` disables with a startup warning). |
 | Audit trail | SQLite append-only events with token/secret redaction. |
 
+### Volume limits: three distinct caps
+
+A trade can be bounded by three separate limits. Keep them straight:
+
+1. **`max_order_volume`** (MCP gate, configurable) — the largest volume the MCP
+   submits in a single order. See `YUGEN_MT5_MAX_ORDER_VOLUME`.
+2. **`max_symbol_exposure`** (MCP gate, configurable) — the largest cumulative
+   open volume the MCP allows across all positions in one symbol. See
+   `YUGEN_MT5_MAX_SYMBOL_EXPOSURE`.
+3. **Broker per-order volume limit** (`volume_max`, enforced by the broker) —
+   the broker rejects any single order whose volume exceeds its per-symbol
+   maximum (for example, Boom 1000 Index caps orders at 5 lots). The MCP does
+   **not** auto-split: it submits exactly what you request and surfaces the
+   broker's rejection.
+
+The broker limit applies to **both opening and closing** orders — a close is
+just another order. Closing a large position (e.g. 19 lots) therefore requires
+splitting the close into chunks of `volume_max` or smaller, exactly like a
+large entry. The MCP supports each chunk as a normal partial close; deciding
+how to chunk is the caller's responsibility.
+
 ## Demo smoke controls
 
 Live smoke coverage is opt-in and demo-only.

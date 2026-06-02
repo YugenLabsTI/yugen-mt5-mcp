@@ -156,7 +156,9 @@ def test_risk_policy_blocks_excess_exposure(tmp_path: Path) -> None:
         )
 
 
-def test_wildcard_allowed_symbols_does_not_relax_trading_gates(tmp_path: Path) -> None:
+def test_wildcard_allowed_symbols_permits_any_symbol_for_trading(
+    tmp_path: Path,
+) -> None:
     policy, adapter, _, _ = build_policy(
         tmp_path,
         risk_config=RiskConfig(
@@ -166,13 +168,40 @@ def test_wildcard_allowed_symbols_does_not_relax_trading_gates(tmp_path: Path) -
         ),
     )
 
-    with pytest.raises(RiskPolicyError, match="symbol is not allowed"):
+    approval = policy.validate(
+        RiskCheckRequest(
+            session_id="session-1",
+            actor="agent:test",
+            action=TradeAction.OPEN,
+            symbol="Boom 1000 Index",
+            volume=Decimal("0.10"),
+            account=adapter.get_account(),
+            positions=adapter.list_positions("EURUSD"),
+        )
+    )
+
+    assert approval.symbol == "Boom 1000 Index"
+
+
+def test_wildcard_allowed_symbols_does_not_relax_live_trading_gate(
+    tmp_path: Path,
+) -> None:
+    policy, adapter, _, _ = build_policy(
+        tmp_path,
+        risk_config=RiskConfig(
+            allowed_symbols=("*",),
+            allowed_account_modes=("hedging",),
+            allow_live_trading=False,
+        ),
+    )
+
+    with pytest.raises(RiskPolicyError, match="live trading is disabled"):
         policy.validate(
             RiskCheckRequest(
                 session_id="session-1",
                 actor="agent:test",
                 action=TradeAction.OPEN,
-                symbol="EURUSD",
+                symbol="Boom 1000 Index",
                 volume=Decimal("0.10"),
                 account=adapter.get_account(),
                 positions=adapter.list_positions("EURUSD"),

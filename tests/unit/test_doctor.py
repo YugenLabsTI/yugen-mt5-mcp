@@ -156,7 +156,7 @@ def test_create_default_doctor_reports_runtime_context_warning_details(tmp_path:
         entrypoint_warnings=(
             EntrypointWarning(
                 code="allowed_symbols_wildcard",
-                message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+                message="YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
             ),
         ),
     )
@@ -174,7 +174,7 @@ def test_create_default_doctor_reports_runtime_context_warning_details(tmp_path:
         "warnings": [
             {
                 "code": "allowed_symbols_wildcard",
-                "message": "YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for read tools",
+                "message": "YUGEN_MT5_ALLOWED_SYMBOLS=* allows every symbol for reads and trading",
             }
         ],
     }

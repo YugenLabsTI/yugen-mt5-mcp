@@ -12,7 +12,13 @@ from typing import cast
 
 import pytest
 
-from tests.fakes.fake_mt5 import FakeMT5Backend, FakeMT5Symbol, FakeMT5Tick
+from tests.fakes.fake_mt5 import (
+    FakeMT5Backend,
+    FakeMT5Order,
+    FakeMT5Position,
+    FakeMT5Symbol,
+    FakeMT5Tick,
+)
 from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.config import AppConfig, RiskConfig
 from yugen_mt5_mcp.market_data import MarketDataService
@@ -265,6 +271,88 @@ def test_place_market_order_uses_allowed_symbol_casing_for_mt5_calls(
                 {
                     "session_id": "s1",
                     "idempotency_key": "k-boom-2",
+                    "symbol": "boom 1000 index",
+                    "side": "buy",
+                    "volume": "0.2",
+                },
+            )
+            return cast(dict[str, object], result.data)
+
+    payload = asyncio.run(call())
+
+    assert payload["symbol"] == "Boom 1000 Index"
+    assert backend.selected_symbols[-1] == "Boom 1000 Index"
+
+
+def test_place_market_order_accepts_wildcard_allowed_symbols(
+    tmp_path: Path,
+) -> None:
+    server, backend, session_store, _ = _build_server(
+        tmp_path,
+        allowed_symbols=("*",),
+    )
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=14057.38,
+        ask=14058.51,
+        last=14058.00,
+        volume=10,
+        time=1_700_000_000,
+    )
+
+    async def call() -> dict[str, object]:
+        from fastmcp.client import Client
+
+        async with Client(server) as client:  # type: ignore[arg-type]
+            result = await client.call_tool(
+                "place_market_order",
+                {
+                    "session_id": "s1",
+                    "idempotency_key": "k-boom-wildcard",
+                    "symbol": "Boom 1000 Index",
+                    "side": "buy",
+                    "volume": "0.2",
+                },
+            )
+            return cast(dict[str, object], result.data)
+
+    payload = asyncio.run(call())
+
+    assert payload["symbol"] == "Boom 1000 Index"
+    assert backend.selected_symbols[-1] == "Boom 1000 Index"
+
+
+def test_place_market_order_wildcard_resolves_broker_symbol_casing(
+    tmp_path: Path,
+) -> None:
+    server, backend, session_store, _ = _build_server(
+        tmp_path,
+        allowed_symbols=("*",),
+    )
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=14057.38,
+        ask=14058.51,
+        last=14058.00,
+        volume=10,
+        time=1_700_000_000,
+    )
+
+    async def call() -> dict[str, object]:
+        from fastmcp.client import Client
+
+        async with Client(server) as client:  # type: ignore[arg-type]
+            result = await client.call_tool(
+                "place_market_order",
+                {
+                    "session_id": "s1",
+                    "idempotency_key": "k-boom-wildcard-case",
                     "symbol": "boom 1000 index",
                     "side": "buy",
                     "volume": "0.2",
@@ -608,6 +696,104 @@ def test_close_all_positions_success_shape(tmp_path: Path) -> None:
     assert items[0]["status"] == "executed"
 
 
+def test_close_all_by_symbol_wildcard_resolves_broker_symbol_casing(
+    tmp_path: Path,
+) -> None:
+    server, backend, session_store, _ = _build_server(
+        tmp_path,
+        allowed_symbols=("*",),
+    )
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=14057.38,
+        ask=14058.51,
+        last=14058.00,
+        volume=10,
+        time=1_700_000_000,
+    )
+    backend.positions.append(
+        FakeMT5Position(
+            ticket=1002,
+            symbol="Boom 1000 Index",
+            volume=0.2,
+            type=0,
+            price_open=14058.51,
+            profit=5.0,
+            price_current=14058.51,
+        )
+    )
+
+    async def call() -> dict[str, object]:
+        from fastmcp.client import Client
+
+        async with Client(server) as client:  # type: ignore[arg-type]
+            result = await client.call_tool(
+                "close_all_by_symbol",
+                {
+                    "session_id": "s1",
+                    "idempotency_key": "k-bulk-boom-close",
+                    "symbol": "boom 1000 index",
+                    "confirm": True,
+                },
+            )
+            return cast(dict[str, object], result.data)
+
+    payload = asyncio.run(call())
+
+    assert payload["requested"] == 1
+    assert payload["succeeded"] == 1
+    items = cast(list[dict[str, object]], payload["items"])
+    assert items[0]["symbol"] == "Boom 1000 Index"
+
+
+def test_cancel_all_pending_by_symbol_wildcard_resolves_broker_symbol_casing(
+    tmp_path: Path,
+) -> None:
+    server, backend, session_store, _ = _build_server(
+        tmp_path,
+        allowed_symbols=("*",),
+    )
+    session_store.acknowledge_real_account(
+        session_id="s1", actor="user@test.com", account_login=123456
+    )
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.orders.append(
+        FakeMT5Order(
+            ticket=2002,
+            symbol="Boom 1000 Index",
+            volume_initial=0.2,
+            price_open=14000.0,
+            state=1,
+            type=2,
+        )
+    )
+
+    async def call() -> dict[str, object]:
+        from fastmcp.client import Client
+
+        async with Client(server) as client:  # type: ignore[arg-type]
+            result = await client.call_tool(
+                "cancel_all_pending_by_symbol",
+                {
+                    "session_id": "s1",
+                    "idempotency_key": "k-bulk-boom-cancel",
+                    "symbol": "boom 1000 index",
+                    "confirm": True,
+                },
+            )
+            return cast(dict[str, object], result.data)
+
+    payload = asyncio.run(call())
+
+    assert payload["requested"] == 1
+    assert payload["succeeded"] == 1
+    items = cast(list[dict[str, object]], payload["items"])
+    assert items[0]["symbol"] == "Boom 1000 Index"
+
+
 # --- WU10-T13: close_all_profitable only includes profit>0 positions ---
 
 
@@ -616,8 +802,6 @@ def test_close_all_profitable_filters_correctly(tmp_path: Path) -> None:
     session_store.acknowledge_real_account(
         session_id="s1", actor="user@test.com", account_login=123456
     )
-    from tests.fakes.fake_mt5 import FakeMT5Position
-
     # Add a losing position alongside the default profitable one
     backend.positions.append(
         FakeMT5Position(

@@ -7,6 +7,16 @@ from fastmcp import FastMCP
 from .doctor import DoctorService
 from .market_data import MarketDataService, to_payload
 
+READ_ONLY_TOOL_NAMES = (
+    "list_symbols",
+    "get_tick",
+    "get_candles",
+    "get_account",
+    "list_positions",
+    "list_orders",
+    "get_history",
+)
+
 
 def register_market_data_tools(mcp: FastMCP, market_data: MarketDataService) -> None:
     @mcp.tool

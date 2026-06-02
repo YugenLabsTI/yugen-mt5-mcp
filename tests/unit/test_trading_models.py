@@ -7,7 +7,6 @@ from decimal import Decimal
 from yugen_mt5_mcp.market_data import to_payload
 from yugen_mt5_mcp.trading import BulkItemResult, BulkTradeResult, ExecutedTrade
 
-
 # ---------------------------------------------------------------------------
 # WU2-T1: Enriched ExecutedTrade — all seven AT-9-a required payload keys
 # ---------------------------------------------------------------------------
@@ -40,7 +39,9 @@ def test_executed_trade_new_fields_have_defaults() -> None:
 
 
 def test_executed_trade_new_fields_can_be_set() -> None:
-    trade = _base_trade(applied_sl=1.090, applied_tp=1.120, deviation=3, position=1001, dry_run=True)
+    trade = _base_trade(
+        applied_sl=1.090, applied_tp=1.120, deviation=3, position=1001, dry_run=True
+    )
     assert trade.applied_sl == 1.090
     assert trade.applied_tp == 1.120
     assert trade.deviation == 3
@@ -52,7 +53,10 @@ def test_executed_trade_to_payload_contains_all_seven_required_keys() -> None:
     trade = _base_trade(applied_sl=1.090, applied_tp=1.120, deviation=3)
     payload = to_payload(trade)
     assert isinstance(payload, dict)
-    for key in ("executed_price", "executed_volume", "order", "deal", "applied_sl", "applied_tp", "deviation"):
+    for key in (
+        "executed_price", "executed_volume", "order", "deal",
+        "applied_sl", "applied_tp", "deviation",
+    ):
         assert key in payload, f"missing key: {key}"
 
 

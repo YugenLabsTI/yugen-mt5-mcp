@@ -268,8 +268,6 @@ def register_trading_action_tools(
         mode: str = "best_effort",
         dry_run: bool = False,
     ) -> object:
-        from typing import Literal  # noqa: PLC0415
-
         return to_payload(
             bulk_service.close_all(
                 session_id=session_id,

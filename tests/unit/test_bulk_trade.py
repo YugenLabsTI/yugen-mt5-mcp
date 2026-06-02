@@ -5,24 +5,18 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from tests.fakes.fake_mt5 import FakeMT5Backend
 from yugen_mt5_mcp.audit import AuditStore
-from yugen_mt5_mcp.config import AppConfig, RiskConfig
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
-from yugen_mt5_mcp.risk import RiskPolicy
-from yugen_mt5_mcp.session import SessionRiskStore
 from yugen_mt5_mcp.trading import (
     BulkTradeResult,
     BulkTradeService,
     ExecutedTrade,
     TradingError,
-    TradingService,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub TradingService for isolation
@@ -119,10 +113,11 @@ def test_bulk_close_all_best_effort_partial_failure(tmp_path: Path) -> None:
     from tests.fakes.fake_mt5 import FakeMT5Position  # noqa: PLC0415
 
     backend = FakeMT5Backend()
+    _p = FakeMT5Position
     backend.positions = [
-        FakeMT5Position(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
-        FakeMT5Position(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
-        FakeMT5Position(ticket=1003, symbol="EURUSD", volume=0.1, type=0, price_open=1.097, profit=-3.0),
+        _p(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
+        _p(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
+        _p(ticket=1003, symbol="EURUSD", volume=0.1, type=0, price_open=1.097, profit=-3.0),
     ]
     stub = _StubTradingService([
         _make_executed("bulk-1:1001", 1001),
@@ -155,11 +150,12 @@ def test_bulk_close_all_best_effort_partial_failure(tmp_path: Path) -> None:
 def test_bulk_close_all_fail_fast_stops_on_first_failure(tmp_path: Path) -> None:
     from tests.fakes.fake_mt5 import FakeMT5Position  # noqa: PLC0415
 
+    _p = FakeMT5Position
     backend = FakeMT5Backend()
     backend.positions = [
-        FakeMT5Position(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
-        FakeMT5Position(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
-        FakeMT5Position(ticket=1003, symbol="EURUSD", volume=0.1, type=0, price_open=1.097, profit=-3.0),
+        _p(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
+        _p(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
+        _p(ticket=1003, symbol="EURUSD", volume=0.1, type=0, price_open=1.097, profit=-3.0),
     ]
     stub = _StubTradingService([TradingError("first fails")])
     service = _make_bulk_service(tmp_path, stub, backend)
@@ -188,11 +184,12 @@ def test_bulk_close_all_fail_fast_stops_on_first_failure(tmp_path: Path) -> None
 def test_bulk_close_all_fail_fast_prior_exec_not_rolled_back(tmp_path: Path) -> None:
     from tests.fakes.fake_mt5 import FakeMT5Position  # noqa: PLC0415
 
+    _p = FakeMT5Position
     backend = FakeMT5Backend()
     backend.positions = [
-        FakeMT5Position(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
-        FakeMT5Position(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
-        FakeMT5Position(ticket=1003, symbol="EURUSD", volume=0.1, type=0, price_open=1.097, profit=-3.0),
+        _p(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
+        _p(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
+        _p(ticket=1003, symbol="EURUSD", volume=0.1, type=0, price_open=1.097, profit=-3.0),
     ]
     stub = _StubTradingService([
         _make_executed("bulk-1:1001", 1001),
@@ -243,10 +240,11 @@ def test_bulk_close_all_empty_positions(tmp_path: Path) -> None:
 def test_bulk_close_all_derives_per_trade_idempotency_sub_keys(tmp_path: Path) -> None:
     from tests.fakes.fake_mt5 import FakeMT5Position  # noqa: PLC0415
 
+    _p = FakeMT5Position
     backend = FakeMT5Backend()
     backend.positions = [
-        FakeMT5Position(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
-        FakeMT5Position(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
+        _p(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
+        _p(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
     ]
     stub = _StubTradingService([
         _make_executed("bulk-key:1001", 1001),
@@ -297,10 +295,11 @@ def test_bulk_cancel_all_pending_returns_bulk_trade_result(tmp_path: Path) -> No
 def test_bulk_close_all_profitable_filters_by_profit(tmp_path: Path) -> None:
     from tests.fakes.fake_mt5 import FakeMT5Position  # noqa: PLC0415
 
+    _p = FakeMT5Position
     backend = FakeMT5Backend()
     backend.positions = [
-        FakeMT5Position(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=50.0),
-        FakeMT5Position(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=-20.0),
+        _p(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=50.0),
+        _p(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=-20.0),
     ]
     stub = _StubTradingService([_make_executed("bulk-1:1001", 1001)])
     service = _make_bulk_service(tmp_path, stub, backend)
@@ -324,10 +323,11 @@ def test_bulk_close_all_profitable_filters_by_profit(tmp_path: Path) -> None:
 def test_bulk_close_all_losing_filters_by_profit(tmp_path: Path) -> None:
     from tests.fakes.fake_mt5 import FakeMT5Position  # noqa: PLC0415
 
+    _p = FakeMT5Position
     backend = FakeMT5Backend()
     backend.positions = [
-        FakeMT5Position(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=50.0),
-        FakeMT5Position(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=-20.0),
+        _p(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=50.0),
+        _p(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=-20.0),
     ]
     stub = _StubTradingService([_make_executed("bulk-1:1002", 1002)])
     service = _make_bulk_service(tmp_path, stub, backend)
@@ -351,10 +351,11 @@ def test_bulk_close_all_losing_filters_by_profit(tmp_path: Path) -> None:
 def test_bulk_close_all_emits_bulk_audit_envelope(tmp_path: Path) -> None:
     from tests.fakes.fake_mt5 import FakeMT5Position  # noqa: PLC0415
 
+    _p = FakeMT5Position
     backend = FakeMT5Backend()
     backend.positions = [
-        FakeMT5Position(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
-        FakeMT5Position(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
+        _p(ticket=1001, symbol="EURUSD", volume=0.2, type=0, price_open=1.095, profit=10.0),
+        _p(ticket=1002, symbol="EURUSD", volume=0.1, type=0, price_open=1.096, profit=5.0),
     ]
     stub = _StubTradingService([
         _make_executed("bulk-1:1001", 1001),

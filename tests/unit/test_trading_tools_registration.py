@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import pytest
 
@@ -19,7 +19,6 @@ from tests.fakes.fake_mt5 import FakeMT5Backend
 from yugen_mt5_mcp.app import build_runtime
 from yugen_mt5_mcp.audit import AuditStore
 from yugen_mt5_mcp.config import AppConfig, RiskConfig
-from yugen_mt5_mcp.doctor import create_default_doctor
 from yugen_mt5_mcp.market_data import MarketDataService
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
 from yugen_mt5_mcp.risk import RiskPolicy
@@ -83,7 +82,9 @@ def test_create_server_without_trading_deps_has_no_trading_tools(tmp_path: Path)
 
     tool_names = asyncio.run(get_tool_names())
     for name in TRADING_TOOL_NAMES:
-        assert name not in tool_names, f"Trading tool {name!r} should not be registered without deps"
+        assert name not in tool_names, (
+            f"Trading tool {name!r} should not be registered without deps"
+        )
 
 
 # --- WU9-T2: with trading deps → all 13 trading tool names present ---
@@ -156,11 +157,6 @@ def test_trading_tool_names_tuple_contains_all_13() -> None:
 
 
 def test_build_runtime_includes_trading_tools(tmp_path: Path) -> None:
-    class _Capture:
-        server: object = None
-
-    capture = _Capture()
-
     async def get_tool_names(server: object) -> list[str]:
         from fastmcp import FastMCP
         from fastmcp.client import Client

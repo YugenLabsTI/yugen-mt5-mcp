@@ -132,6 +132,7 @@ def test_build_runtime_default_factory_wires_doctor_dependencies(
     def fake_create_server(
         market_data: MarketDataService,
         doctor_service: object | None = None,
+        **_: object,
     ) -> FakeServer:
         nonlocal captured_market_data, captured_doctor_service
         captured_market_data = market_data
@@ -185,7 +186,7 @@ def test_build_runtime_passes_wildcard_warning_into_doctor(
     monkeypatch.setattr(
         app_module,
         "create_server",
-        lambda market_data, doctor_service=None: FakeServer(),
+        lambda market_data, doctor_service=None, **_: FakeServer(),
     )
 
     runtime = build_runtime(

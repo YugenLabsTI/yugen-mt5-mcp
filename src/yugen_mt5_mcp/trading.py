@@ -101,6 +101,7 @@ class TradingService:
         comment: str | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
+        symbol = self._risk_policy.resolve_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         approval = self._risk_policy.validate(
@@ -144,6 +145,7 @@ class TradingService:
         ticket: int | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
+        symbol = self._risk_policy.resolve_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         target_position = self._resolve_close_target(
@@ -193,6 +195,7 @@ class TradingService:
         take_profit: float | None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
+        symbol = self._risk_policy.resolve_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         target_position = self._find_position(ticket=ticket, symbol=symbol, positions=positions)
@@ -390,6 +393,7 @@ class TradingService:
         comment: str | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
+        symbol = self._risk_policy.resolve_symbol(symbol)
         account = self._adapter.get_account()
         positions = self._adapter.list_positions(symbol)
         approval = self._risk_policy.validate(
@@ -433,6 +437,7 @@ class TradingService:
         take_profit: float | None = None,
         dry_run: bool = False,
     ) -> ExecutedTrade:
+        symbol = self._risk_policy.resolve_symbol(symbol)
         account = self._adapter.get_account()
         orders = self._adapter.list_orders(symbol)
         target_order = self._find_order(ticket=ticket, symbol=symbol, orders=orders)
@@ -470,6 +475,7 @@ class TradingService:
         symbol: str,
         dry_run: bool = False,
     ) -> ExecutedTrade:
+        symbol = self._risk_policy.resolve_symbol(symbol)
         account = self._adapter.get_account()
         orders = self._adapter.list_orders(symbol)
         target_order = self._find_order(ticket=ticket, symbol=symbol, orders=orders)

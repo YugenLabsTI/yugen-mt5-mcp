@@ -237,59 +237,14 @@ class PipeTransport:
             ChartBridgeError: on pipe creation or I/O failure.
         """
         deadline = time.monotonic() + timeout_seconds
-        # --- TEMP latency instrumentation (remove after diagnosis) ----------
-        # Splits the round-trip into create/connect/write/read so we can see
-        # WHICH phase eats the seconds. Survives the timeout path: the finally
-        # block logs whatever phases completed (a missing phase = hung there).
-        t_start = time.monotonic()
-        marks: dict[str, float] = {}
-        # --------------------------------------------------------------------
         handle = self._create_pipe()
-        marks["create"] = time.monotonic()
         try:
             self._connect(handle, deadline)
-            marks["connect"] = time.monotonic()
             self._write(handle, request_line)
-            marks["write"] = time.monotonic()
-            response = self._recv_line(handle, deadline)
-            marks["read"] = time.monotonic()
-            return response
+            return self._recv_line(handle, deadline)
         finally:
-            self._log_timing(t_start, marks)  # TEMP instrumentation
             self._k32.DisconnectNamedPipe(handle)
             self._k32.CloseHandle(handle)
-
-    def _log_timing(self, t_start: float, marks: dict[str, float]) -> None:
-        """TEMP: emit per-phase latency breakdown to stderr and a temp file.
-
-        Phase deltas are measured from the previous completed mark. A phase
-        printed as ``--`` never completed (the exchange raised/timed out there),
-        which by itself pinpoints the hanging layer. Remove once the latency
-        root cause is found.
-        """
-        ordered = ("create", "connect", "write", "read")
-        parts: list[str] = []
-        prev = t_start
-        last = t_start
-        for name in ordered:
-            ts = marks.get(name)
-            if ts is None:
-                parts.append(f"{name}=--")
-                continue
-            parts.append(f"{name}={(ts - prev) * 1000:.1f}ms")
-            prev = ts
-            last = ts
-        line = f"[chart-bridge-timing] total={(last - t_start) * 1000:.1f}ms " + " ".join(parts)
-        print(line, file=sys.stderr, flush=True)
-        try:
-            import os  # noqa: PLC0415
-            import tempfile  # noqa: PLC0415
-
-            path = os.path.join(tempfile.gettempdir(), "yugen_chart_timing.log")
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except OSError:
-            pass
 
     # ------------------------------------------------------------------
     # Private helpers

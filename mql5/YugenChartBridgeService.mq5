@@ -872,6 +872,21 @@ bool ApplyCreateObject(
       return false;
      }
 
+   // Multi-anchor objects (RECTANGLE, TREND, CHANNEL...) need DISTINCT times on
+   // each corner. Price-only requests like draw_zone supply no time, so every
+   // corner would land on the same time → the object collapses to a vertical
+   // line. Synthesise spanning times (staggered bars back from now) for any
+   // secondary point that lacks one, giving the object real horizontal width.
+   int bar_seconds = PeriodSeconds((ENUM_TIMEFRAMES)ChartPeriod(chart_id));
+   for(int i = 1; i < pt_count; i++)
+     {
+      if(!pts[i].has_time)
+        {
+         pts[i].time_val = TimeCurrent() - (datetime)(i * 60 * bar_seconds);  // i*60 bars back
+         pts[i].has_time = true;
+        }
+     }
+
    // Set additional points for multi-point objects
    if(pt_count > 1)
       SetObjectPoint(chart_id, request.object_name, 1, pts[1]);

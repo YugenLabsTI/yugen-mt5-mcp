@@ -201,7 +201,11 @@ class MarketDataService:
                 if requested.casefold() == allowed_symbol.casefold():
                     return allowed_symbol
             raise MarketDataError(f"symbol is not allowed: {requested}")
-        return requested.upper()
+        # No allowlist configured: resolve against the broker's real symbol list
+        # (case-insensitive match, case-preserving result). MT5 symbol names are
+        # case-sensitive, so we must NOT uppercase — that broke every mixed-case
+        # instrument (e.g. "Boom 1000 Index").
+        return self._resolve_broker_symbol(requested)
 
     def _validate_optional_symbol(self, symbol: str | None) -> str | None:
         if symbol is None:

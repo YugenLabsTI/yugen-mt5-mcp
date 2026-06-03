@@ -28,6 +28,10 @@ DEFAULT_DEMO_SMOKE_SYMBOLS = ("EURUSD",)
 class RemoteSecurityError(PermissionError):
     """Raised when remote access or smoke execution is unsafe."""
 
+    def __init__(self, *args: object, reason: str = "config_error") -> None:
+        super().__init__(*args)
+        self.reason = reason
+
 
 @dataclass(slots=True, frozen=True)
 class RemoteRequestIdentity:
@@ -113,13 +117,15 @@ class RemoteSecurityManager:
     ) -> RemoteRequestIdentity:
         try:
             if not _ip_in_allowlist(client_ip, self._remote_config.allowlist):
-                raise RemoteSecurityError("client IP is not in the allowlist")
+                raise RemoteSecurityError(
+                    "client IP is not in the allowlist", reason="ip_blocked"
+                )
 
             token = _extract_bearer_token(authorization_header)
             if token is None:
-                raise RemoteSecurityError("missing bearer token")
+                raise RemoteSecurityError("missing bearer token", reason="missing_token")
             if not compare_digest(token, self._remote_config.bearer_token or ""):
-                raise RemoteSecurityError("invalid bearer token")
+                raise RemoteSecurityError("invalid bearer token", reason="invalid_token")
         except RemoteSecurityError as error:
             self._audit(
                 request_id=request_id,
@@ -171,33 +177,35 @@ def validate_remote_transport_config(remote_config: RemoteTransportConfig) -> No
     if not remote_config.enabled:
         return
 
+    # Token always required (both tiers).
     if not remote_config.bearer_token or not remote_config.bearer_token.strip():
         raise RemoteSecurityError("remote transport requires a bearer token")
 
-    if not remote_config.tls_terminated:
-        raise RemoteSecurityError("remote transport requires TLS termination")
-
+    # Port range check (both tiers).
     if not 1 <= remote_config.port <= 65535:
         raise RemoteSecurityError("remote transport port must be between 1 and 65535")
 
-    if (remote_config.reverse_proxy or "").strip().lower() != "caddy":
-        raise RemoteSecurityError(
-            "remote transport requires a Caddy reverse proxy for TLS termination"
-        )
-
-    bind_ip = _parse_ip_address(remote_config.host, field_name="remote transport host")
-    if bind_ip.is_unspecified:
-        raise RemoteSecurityError("remote transport host must not use a wildcard bind")
-    if not _is_safe_bind_address(bind_ip):
-        raise RemoteSecurityError("remote transport host must use a private or loopback bind")
-
+    # Allowlist mandatory (both tiers).
     if not remote_config.allowlist:
         raise RemoteSecurityError("remote transport requires a non-empty allowlist")
 
+    # Validate each allowlist entry: '*' is allowed as-is; anything else must parse as CIDR.
     for entry in remote_config.allowlist:
-        network = _parse_network(entry)
-        if network.prefixlen == 0:
-            raise RemoteSecurityError("remote transport allowlist must not allow all addresses")
+        if entry != "*":
+            _parse_network(entry)  # raises RemoteSecurityError on invalid CIDR
+
+    # Derive trust tier from bind address.
+    bind_ip = _parse_ip_address(remote_config.host, field_name="remote transport host")
+    trusted_local = _is_trusted_local_bind(bind_ip)
+    # Note: is_unspecified (0.0.0.0 / ::) is NOT loopback and NOT RFC 1918 → public tier.
+
+    if not trusted_local:
+        # Public tier: TLS required unless operator explicitly opts out via allow_insecure.
+        if not remote_config.tls_terminated and not remote_config.allow_insecure:
+            raise RemoteSecurityError(
+                "public remote transport requires TLS termination"
+                " or ALLOW_INSECURE opt-out"
+            )
 
 
 def _extract_bearer_token(authorization_header: str | None) -> str | None:
@@ -210,6 +218,8 @@ def _extract_bearer_token(authorization_header: str | None) -> str | None:
 
 
 def _ip_in_allowlist(client_ip: str, allowlist: Sequence[str]) -> bool:
+    if "*" in allowlist:
+        return True
     client_address = _parse_ip_address(client_ip, field_name="client IP")
     return any(client_address in _parse_network(entry) for entry in allowlist)
 
@@ -232,3 +242,32 @@ def _parse_network(value: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
 
 def _is_safe_bind_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return address.is_loopback or address.is_private
+
+
+# RFC 1918 private ranges (IPv4) and ULA (IPv6) — used for trust-tier determination.
+# Python 3.11 changed is_private to cover documentation/test ranges (RFC 5737 etc.)
+# which are NOT operator LAN addresses.  We pin to RFC 1918 + loopback explicitly.
+_RFC1918_V4: tuple[ipaddress.IPv4Network, ...] = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+_RFC4193_V6: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _is_trusted_local_bind(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Return True when the bind address is loopback or an RFC 1918/4193 LAN address.
+
+    This is the trust-tier gate: trusted-local → TLS optional; public → TLS required.
+    We do NOT use ipaddress.is_private because Python 3.11+ extended it to cover
+    documentation/test ranges (RFC 5737, etc.) that are not operator LAN addresses.
+    """
+    if address.is_loopback:
+        return True
+    if isinstance(address, ipaddress.IPv4Address):
+        return any(address in net for net in _RFC1918_V4)
+    return any(address in net for net in _RFC4193_V6)

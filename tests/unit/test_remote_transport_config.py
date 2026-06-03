@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from yugen_mt5_mcp.config import AppConfig, RemoteTransportConfig
 
 

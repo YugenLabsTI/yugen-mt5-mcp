@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from fastmcp import FastMCP
 from pydantic import BeforeValidator
+from starlette.middleware import Middleware
+from starlette.types import ASGIApp
 
 from .chart_bridge import (
     ChartBridgeClient,
@@ -20,9 +22,11 @@ from .chart_bridge import (
     ChartObjectSpec,
     ChartSelector,
 )
-from .config import AppConfig
+from .config import AppConfig, RemoteTransportConfig
 from .doctor import DoctorService
 from .market_data import MarketDataService, to_payload
+from .remote import BearerIPAuthMiddleware, trust_proxy_headers_for_bind
+from .security import RemoteSecurityManager
 from .session import SessionRiskStore
 from .trading import BulkTradeService, TradingService
 
@@ -764,6 +768,29 @@ def register_trading_action_tools(
                 dry_run=dry_run,
             )
         )
+
+
+def build_http_app(
+    mcp: FastMCP,
+    remote_config: RemoteTransportConfig,
+    security_manager: RemoteSecurityManager,
+) -> ASGIApp:
+    """Compose the FastMCP http_app with BearerIPAuthMiddleware installed.
+
+    The trust decision for X-Forwarded-For is derived once at composition time
+    from the bind host so the per-request middleware never recalculates it.
+    """
+    return mcp.http_app(
+        path=remote_config.path,
+        middleware=[
+            Middleware(
+                BearerIPAuthMiddleware,
+                security_manager=security_manager,
+                trust_proxy_headers=trust_proxy_headers_for_bind(remote_config.host),
+            )
+        ],
+        stateless_http=remote_config.stateless_http,
+    )
 
 
 def create_server(

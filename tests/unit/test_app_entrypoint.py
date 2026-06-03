@@ -19,7 +19,7 @@ from yugen_mt5_mcp.app import (
     run_stdio,
 )
 from yugen_mt5_mcp.audit import AuditStore
-from yugen_mt5_mcp.config import AppConfig
+from yugen_mt5_mcp.config import AppConfig, TransportMode
 from yugen_mt5_mcp.doctor import DoctorService, DoctorStatus
 from yugen_mt5_mcp.market_data import MarketDataService
 from yugen_mt5_mcp.mt5_adapter import MT5Adapter
@@ -288,3 +288,375 @@ def test_run_stdio_runs_server_with_stdio_transport() -> None:
     run_stdio(server)
 
     assert server.run_calls == [("stdio", True)]
+
+
+# ---------------------------------------------------------------------------
+# T-06: parse_remote_transport_config — env constants + parse scenarios
+# S-CFG-01 through S-CFG-07
+# ---------------------------------------------------------------------------
+
+_FIVE_ENTRY_DEFAULT = (
+    "127.0.0.1/32",
+    "::1/128",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+)
+
+
+def test_s_cfg_01_empty_env_remote_disabled() -> None:
+    """S-CFG-01: empty env → enabled=False."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+
+    result = parse_remote_transport_config({})
+
+    assert result.enabled is False
+
+
+def test_s_cfg_02_minimal_enable_applies_all_defaults() -> None:
+    """S-CFG-02: minimal enable (ENABLED=true, TOKEN=tok) → all defaults applied."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+
+    result = parse_remote_transport_config(
+        {
+            "YUGEN_MT5_REMOTE_ENABLED": "true",
+            "YUGEN_MT5_REMOTE_BEARER_TOKEN": "tok",
+        }
+    )
+
+    assert result.enabled is True
+    assert result.host == "127.0.0.1"
+    assert result.port == 8765
+    assert result.bearer_token == "tok"
+    assert result.tls_terminated is False
+    assert result.allow_insecure is False
+    assert result.stateless_http is False
+    assert result.allowlist == _FIVE_ENTRY_DEFAULT
+
+
+def test_s_cfg_03_all_fields_explicit() -> None:
+    """S-CFG-03: all fields set explicitly → all match exactly."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+
+    result = parse_remote_transport_config(
+        {
+            "YUGEN_MT5_REMOTE_ENABLED": "true",
+            "YUGEN_MT5_REMOTE_HOST": "0.0.0.0",
+            "YUGEN_MT5_REMOTE_PORT": "9000",
+            "YUGEN_MT5_REMOTE_BEARER_TOKEN": "s",
+            "YUGEN_MT5_REMOTE_TLS_TERMINATED": "true",
+            "YUGEN_MT5_REMOTE_ALLOWLIST": "10.0.0.0/8,*",
+            "YUGEN_MT5_REMOTE_ALLOW_INSECURE": "true",
+            "YUGEN_MT5_REMOTE_STATELESS_HTTP": "true",
+        }
+    )
+
+    assert result.enabled is True
+    assert result.host == "0.0.0.0"
+    assert result.port == 9000
+    assert result.bearer_token == "s"
+    assert result.tls_terminated is True
+    assert result.allowlist == ("10.0.0.0/8", "*")
+    assert result.allow_insecure is True
+    assert result.stateless_http is True
+
+
+def test_s_cfg_04_invalid_port_raises_config_error() -> None:
+    """S-CFG-04: port=99999 → ConfigError mentioning port."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+    from yugen_mt5_mcp.config import ConfigError
+
+    with pytest.raises(ConfigError, match="port"):
+        parse_remote_transport_config({"YUGEN_MT5_REMOTE_PORT": "99999"})
+
+
+def test_s_cfg_05_non_integer_port_raises_config_error() -> None:
+    """S-CFG-05: non-integer port → ConfigError."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+    from yugen_mt5_mcp.config import ConfigError
+
+    with pytest.raises(ConfigError):
+        parse_remote_transport_config({"YUGEN_MT5_REMOTE_PORT": "not-a-number"})
+
+
+def test_s_cfg_06_invalid_cidr_raises_config_error() -> None:
+    """S-CFG-06: invalid CIDR in allowlist → ConfigError."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+    from yugen_mt5_mcp.config import ConfigError
+
+    with pytest.raises(ConfigError):
+        parse_remote_transport_config({"YUGEN_MT5_REMOTE_ALLOWLIST": "not-a-cidr"})
+
+
+def test_s_cfg_07_wildcard_only_allowlist_is_valid() -> None:
+    """S-CFG-07: ALLOWLIST='*' → allowlist=('*',), no error."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+
+    result = parse_remote_transport_config({"YUGEN_MT5_REMOTE_ALLOWLIST": "*"})
+
+    assert result.allowlist == ("*",)
+
+
+def test_s_cfg_both_wildcard_and_cidr_zero_accepted() -> None:
+    """Both '*' and '0.0.0.0/0' in allowlist are accepted (locked decision #2)."""
+    from yugen_mt5_mcp.app import parse_remote_transport_config
+
+    result = parse_remote_transport_config(
+        {"YUGEN_MT5_REMOTE_ALLOWLIST": "*,0.0.0.0/0,::/0"}
+    )
+
+    assert result.allowlist == ("*", "0.0.0.0/0", "::/0")
+
+
+# ---------------------------------------------------------------------------
+# T-08: build_runtime transport mode branching
+# S-WIRE-01, S-WIRE-02, S-WIRE-03, S-STDIO-01, S-STDIO-02
+# ---------------------------------------------------------------------------
+
+
+def test_s_wire_01_no_remote_enabled_gives_stdio_mode(tmp_path: Path) -> None:
+    """S-WIRE-01: no REMOTE_ENABLED → mode==STDIO, remote.enabled==False."""
+    runtime = build_runtime(
+        env={},
+        audit_path=tmp_path / "audit.sqlite3",
+        adapter_factory=lambda: __import__(
+            "yugen_mt5_mcp.mt5_adapter", fromlist=["MT5Adapter"]
+        ).MT5Adapter(backend=FakeMT5Backend()),
+        server_factory=lambda md, ds: FakeServer(),
+    )
+
+    assert runtime.config.transport.mode is TransportMode.STDIO
+    assert runtime.config.transport.remote.enabled is False
+
+
+def test_s_wire_02_remote_enabled_gives_remote_mode(tmp_path: Path) -> None:
+    """S-WIRE-02: REMOTE_ENABLED=true + TOKEN=tok → mode==REMOTE, remote.enabled==True."""
+    runtime = build_runtime(
+        env={
+            "YUGEN_MT5_REMOTE_ENABLED": "true",
+            "YUGEN_MT5_REMOTE_BEARER_TOKEN": "tok",
+        },
+        audit_path=tmp_path / "audit.sqlite3",
+        adapter_factory=lambda: __import__(
+            "yugen_mt5_mcp.mt5_adapter", fromlist=["MT5Adapter"]
+        ).MT5Adapter(backend=FakeMT5Backend()),
+        server_factory=lambda md, ds: FakeServer(),
+    )
+
+    assert runtime.config.transport.mode is TransportMode.REMOTE
+    assert runtime.config.transport.remote.enabled is True
+
+
+def test_s_wire_03_remote_enabled_without_token_raises_config_error(tmp_path: Path) -> None:
+    """S-WIRE-03: REMOTE_ENABLED=true, no TOKEN → ConfigError at build_runtime."""
+    from yugen_mt5_mcp.config import ConfigError
+
+    with pytest.raises(ConfigError):
+        build_runtime(
+            env={"YUGEN_MT5_REMOTE_ENABLED": "true"},
+            audit_path=tmp_path / "audit.sqlite3",
+            adapter_factory=lambda: __import__(
+                "yugen_mt5_mcp.mt5_adapter", fromlist=["MT5Adapter"]
+            ).MT5Adapter(backend=FakeMT5Backend()),
+            server_factory=lambda md, ds: FakeServer(),
+        )
+
+
+def test_s_stdio_02_build_runtime_empty_env_no_error(tmp_path: Path) -> None:
+    """S-STDIO-02: build_runtime({}) returns valid RuntimeApp with no error."""
+    runtime = build_runtime(
+        env={},
+        audit_path=tmp_path / "audit.sqlite3",
+        adapter_factory=lambda: __import__(
+            "yugen_mt5_mcp.mt5_adapter", fromlist=["MT5Adapter"]
+        ).MT5Adapter(backend=FakeMT5Backend()),
+        server_factory=lambda md, ds: FakeServer(),
+    )
+
+    assert runtime.server is not None
+    assert runtime.config is not None
+    assert runtime.audit_store is not None
+
+
+def test_runtime_app_exposes_config_and_audit_store_fields(tmp_path: Path) -> None:
+    """RuntimeApp exposes config: AppConfig and audit_store: AuditStore fields."""
+    runtime = build_runtime(
+        env={},
+        audit_path=tmp_path / "audit.sqlite3",
+        adapter_factory=lambda: __import__(
+            "yugen_mt5_mcp.mt5_adapter", fromlist=["MT5Adapter"]
+        ).MT5Adapter(backend=FakeMT5Backend()),
+        server_factory=lambda md, ds: FakeServer(),
+    )
+
+    assert isinstance(runtime.config, AppConfig)
+    assert isinstance(runtime.audit_store, AuditStore)
+
+
+# ---------------------------------------------------------------------------
+# T-18: main() choosing run_remote vs run_stdio (monkeypatched uvicorn)
+# ---------------------------------------------------------------------------
+
+
+def test_s_stdio_01_main_calls_run_stdio_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S-STDIO-01: main() with no remote env → run_stdio called, run_remote NOT called."""
+    run_stdio_calls: list[object] = []
+    run_remote_calls: list[object] = []
+
+    fake_server = FakeServer()
+
+    def fake_build_runtime(**kwargs: object) -> object:
+        from dataclasses import dataclass
+
+        @dataclass(slots=True, frozen=True)
+        class _FakeRuntimeApp:
+            server: object
+            warnings: tuple
+            config: object
+            audit_store: object
+
+        from yugen_mt5_mcp.config import AppConfig, TransportConfig, TransportMode
+
+        fake_config = AppConfig(transport=TransportConfig(mode=TransportMode.STDIO))
+        from yugen_mt5_mcp.audit import AuditStore
+
+        fake_audit_store = AuditStore(tmp_path / "audit.sqlite3")
+        return _FakeRuntimeApp(
+            server=fake_server,
+            warnings=(),
+            config=fake_config,
+            audit_store=fake_audit_store,
+        )
+
+    monkeypatch.setattr(app_module, "build_runtime", fake_build_runtime)
+    monkeypatch.setattr(app_module, "run_stdio", lambda srv: run_stdio_calls.append(srv))
+    monkeypatch.setattr(
+        app_module,
+        "run_remote",
+        lambda srv, cfg, audit_store: run_remote_calls.append((srv, cfg, audit_store)),
+    )
+
+    app_module.main()
+
+    assert len(run_stdio_calls) == 1
+    assert len(run_remote_calls) == 0
+
+
+def test_s_wire_main_calls_run_remote_when_remote_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """main() with REMOTE_ENABLED=true + TOKEN=tok → run_remote called, run_stdio NOT called."""
+    run_stdio_calls: list[object] = []
+    run_remote_calls: list[tuple[object, object, object]] = []
+
+    fake_server = FakeServer()
+
+    def fake_build_runtime(**kwargs: object) -> object:
+        from dataclasses import dataclass
+
+        @dataclass(slots=True, frozen=True)
+        class _FakeRuntimeApp:
+            server: object
+            warnings: tuple
+            config: object
+            audit_store: object
+
+        from yugen_mt5_mcp.config import (
+            AppConfig,
+            RemoteTransportConfig,
+            TransportConfig,
+            TransportMode,
+        )
+
+        remote_cfg = RemoteTransportConfig(
+            enabled=True,
+            host="127.0.0.1",
+            port=8765,
+            bearer_token="tok",
+            allowlist=("127.0.0.1/32",),
+        )
+        fake_config = AppConfig(
+            transport=TransportConfig(mode=TransportMode.REMOTE, remote=remote_cfg)
+        )
+        from yugen_mt5_mcp.audit import AuditStore
+
+        fake_audit_store = AuditStore(tmp_path / "audit.sqlite3")
+        return _FakeRuntimeApp(
+            server=fake_server,
+            warnings=(),
+            config=fake_config,
+            audit_store=fake_audit_store,
+        )
+
+    monkeypatch.setattr(app_module, "build_runtime", fake_build_runtime)
+    monkeypatch.setattr(app_module, "run_stdio", lambda srv: run_stdio_calls.append(srv))
+    monkeypatch.setattr(
+        app_module,
+        "run_remote",
+        lambda srv, cfg, audit_store: run_remote_calls.append((srv, cfg, audit_store)),
+    )
+
+    app_module.main()
+
+    assert len(run_remote_calls) == 1
+    assert len(run_stdio_calls) == 0
+    called_server, called_cfg, called_audit_store = run_remote_calls[0]
+    assert called_server is fake_server
+    assert called_cfg.host == "127.0.0.1"
+    assert called_cfg.port == 8765
+
+
+def test_run_remote_calls_uvicorn_run_with_correct_host_port(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_remote: uvicorn.run is called with the ASGI app, correct host and port."""
+    import types
+
+    uvicorn_calls: list[dict[str, object]] = []
+
+    # Build a fake uvicorn module so run_remote's local import resolves
+    fake_uvicorn = types.ModuleType("uvicorn")
+
+    def fake_uvicorn_run(app: object, *, host: str, port: int, **kwargs: object) -> None:
+        uvicorn_calls.append({"app": app, "host": host, "port": port})
+
+    fake_uvicorn.run = fake_uvicorn_run  # type: ignore[attr-defined]
+    monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+
+    from yugen_mt5_mcp.app import run_remote
+    from yugen_mt5_mcp.audit import AuditStore
+    from yugen_mt5_mcp.config import RemoteTransportConfig
+
+    fake_server = FakeServer()
+    remote_cfg = RemoteTransportConfig(
+        enabled=True,
+        host="127.0.0.1",
+        port=8765,
+        bearer_token="tok",
+        allowlist=("127.0.0.1/32",),
+    )
+    audit_store = AuditStore(tmp_path / "audit.sqlite3")
+
+    # Monkeypatch build_http_app and RemoteSecurityManager so no real ASGI app is built
+    import yugen_mt5_mcp.app as app_mod
+
+    monkeypatch.setattr(app_mod, "build_http_app", lambda srv, cfg, mgr: object())
+
+    import yugen_mt5_mcp.security as security_mod
+
+    class FakeManager:
+        def __init__(self, cfg: object, *, audit_store: object) -> None:
+            pass
+
+    monkeypatch.setattr(security_mod, "RemoteSecurityManager", FakeManager)
+
+    run_remote(fake_server, remote_cfg, audit_store)
+
+    assert len(uvicorn_calls) == 1
+    assert uvicorn_calls[0]["host"] == "127.0.0.1"
+    assert uvicorn_calls[0]["port"] == 8765

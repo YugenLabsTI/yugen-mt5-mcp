@@ -5,7 +5,9 @@ Secure MCP server foundations for MetaTrader 5 with audited trading controls, lo
 ## Quick path
 
 1. Start in local `stdio` mode by default.
-2. Enable remote mode only behind Caddy TLS termination with a bearer token, private/loopback bind, and explicit allowlist.
+2. Enable remote mode with a bearer token; use a loopback/private bind (trusted-local, TLS optional)
+   or a public bind behind a TLS terminator (Caddy, nginx, cloud LB — provider-agnostic).
+   See [docs/remote-transport.md](docs/remote-transport.md) for the full deployment guide.
 3. Treat real-account trading as session-scoped risk acceptance that resets on restart.
 
 ## Transport modes
@@ -16,7 +18,7 @@ the tools themselves; it changes the communication channel.
 | Mode | Default | Requirements | Notes |
 |------|---------|--------------|-------|
 | `stdio` | Yes | Client starts the local process | No TCP listener is opened; the client exchanges JSON over the process stdin/stdout pipes. |
-| `remote` | No | `tls_terminated=true`, `reverse_proxy="caddy"`, bearer token, non-public bind, non-empty allowlist | Intended for VPS deployments with Caddy terminating TLS and proxying to the local MCP process. |
+| `remote` | No | `YUGEN_MT5_REMOTE_ENABLED=true`, bearer token, allowlist | HTTP listener on `host:port`. For loopback/private binds TLS is optional (trusted-local tier); for public binds TLS termination is required. See [docs/remote-transport.md](docs/remote-transport.md). |
 
 Use `stdio` when the MCP client and MT5 terminal are on the same Windows host.
 Use `remote` only when another machine or environment, such as WSL or a VPS
@@ -116,23 +118,10 @@ directory:
 `YUGEN_MT5_AUDIT_PATH` defaults to `var/audit.sqlite3`. Set it explicitly for
 desktop clients so audit storage lands in a user-writable directory.
 
-Remote startup is rejected if it tries to:
-
-- skip bearer auth,
-- skip TLS termination,
-- bind to wildcard/public IPs,
-- allow every client (`0.0.0.0/0` or equivalent), or
-- bypass the documented Caddy reverse-proxy path.
-
-## VPS Caddy path
-
-Recommended topology:
-
-```text
-Agent -> HTTPS/WSS -> Caddy (TLS) -> 127.0.0.1:<mcp-port> -> yugen-mt5-mcp
-```
-
-Keep the MCP process on a loopback or private bind. Caddy is the public edge; the MCP server is not.
+Remote startup is rejected if it tries to skip bearer auth or, on a public bind,
+skip both TLS termination and the `ALLOW_INSECURE` opt-out. See
+[docs/remote-transport.md](docs/remote-transport.md) for the full security model,
+deployment topologies, and WSL guidance.
 
 ## Trading safety model
 

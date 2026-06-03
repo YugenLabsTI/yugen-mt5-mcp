@@ -196,7 +196,7 @@ def validate_remote_transport_config(remote_config: RemoteTransportConfig) -> No
 
     # Derive trust tier from bind address.
     bind_ip = _parse_ip_address(remote_config.host, field_name="remote transport host")
-    trusted_local = _is_trusted_local_bind(bind_ip)
+    trusted_local = is_trusted_local_bind(bind_ip)
     # Note: is_unspecified (0.0.0.0 / ::) is NOT loopback and NOT RFC 1918 → public tier.
 
     if not trusted_local:
@@ -257,10 +257,15 @@ _RFC4193_V6: tuple[ipaddress.IPv6Network, ...] = (
 )
 
 
-def _is_trusted_local_bind(
+def is_trusted_local_bind(
     address: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> bool:
     """Return True when the bind address is loopback or an RFC 1918/4193 LAN address.
+
+    Single source of truth for the "trusted-local" trust tier, shared by the
+    remote-config validator (TLS optional vs required) AND the ASGI middleware's
+    X-Forwarded-For trust decision (remote.trust_proxy_headers_for_bind). Keep
+    one definition so the two trust decisions can never diverge.
 
     This is the trust-tier gate: trusted-local → TLS optional; public → TLS required.
     We do NOT use ipaddress.is_private because Python 3.11+ extended it to cover

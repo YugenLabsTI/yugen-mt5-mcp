@@ -3,27 +3,13 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .security import RemoteSecurityError, RemoteSecurityManager
-
-if TYPE_CHECKING:
-    pass
-
-# RFC 1918 private ranges — same pinned definition as security.py for trust-tier parity.
-_RFC1918_V4: tuple[ipaddress.IPv4Network, ...] = (
-    ipaddress.IPv4Network("10.0.0.0/8"),
-    ipaddress.IPv4Network("172.16.0.0/12"),
-    ipaddress.IPv4Network("192.168.0.0/16"),
-)
-_RFC4193_V6: tuple[ipaddress.IPv6Network, ...] = (
-    ipaddress.IPv6Network("fc00::/7"),
-)
+from .security import RemoteSecurityError, RemoteSecurityManager, is_trusted_local_bind
 
 
 def trust_proxy_headers_for_bind(host: str) -> bool:
@@ -32,16 +18,16 @@ def trust_proxy_headers_for_bind(host: str) -> bool:
     Only when the socket peer is from a trusted address range is it safe to
     trust X-Forwarded-For — because the terminator (which sets XFF) must itself
     be on that LAN.  Public or unspecified (0.0.0.0) binds are excluded.
+
+    Delegates to ``security.is_trusted_local_bind`` so the XFF-trust decision
+    here and the validator's trust-tier decision share ONE definition and can
+    never diverge.
     """
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
         return False
-    if address.is_loopback:
-        return True
-    if isinstance(address, ipaddress.IPv4Address):
-        return any(address in net for net in _RFC1918_V4)
-    return any(address in net for net in _RFC4193_V6)
+    return is_trusted_local_bind(address)
 
 
 def resolve_client_ip(request: Request, *, trust_proxy_headers: bool) -> str:

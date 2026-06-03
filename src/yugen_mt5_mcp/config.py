@@ -48,6 +48,9 @@ class RemoteTransportConfig:
     tls_terminated: bool = False
     reverse_proxy: str | None = None
     allowlist: tuple[str, ...] = ("127.0.0.1/32", "::1/128")
+    allow_insecure: bool = False
+    stateless_http: bool = False
+    path: str = "/mcp/"
 
     def validate(self) -> None:
         if not self.enabled:
@@ -127,6 +130,9 @@ class AppConfig:
             tls_terminated=bool(remote_data.get("tls_terminated", False)),
             reverse_proxy=remote_data.get("reverse_proxy"),
             allowlist=_as_tuple(remote_data.get("allowlist", ("127.0.0.1/32", "::1/128"))),
+            allow_insecure=bool(remote_data.get("allow_insecure", False)),
+            stateless_http=bool(remote_data.get("stateless_http", False)),
+            path=str(remote_data.get("path", "/mcp/")),
         )
         transport = TransportConfig(
             mode=TransportMode(str(transport_data.get("mode", TransportMode.STDIO.value))),

@@ -282,15 +282,22 @@ bool ResolveChart(const ChartBridgeRequest &request, long &chart_id)
    long current = ChartFirst();
    while(current >= 0)
      {
+      // Case-insensitive match. StringToUpper modifies a string IN PLACE and
+      // returns bool, and request.* are const (cannot be passed by reference),
+      // so uppercase mutable local copies and compare those.
       string chart_symbol = ChartSymbol(current);
-      // Case-insensitive symbol match
-      bool symbol_match = (request.symbol == "") ||
-                          (StringToUpper(chart_symbol) == StringToUpper(request.symbol));
+      StringToUpper(chart_symbol);
+      string req_symbol = request.symbol;
+      StringToUpper(req_symbol);
+      bool symbol_match = (request.symbol == "") || (chart_symbol == req_symbol);
       bool tf_match = true;
       if(request.timeframe != "")
         {
          string chart_tf = EnumToString((ENUM_TIMEFRAMES)ChartPeriod(current));
-         tf_match = (StringToUpper(chart_tf) == StringToUpper(request.timeframe));
+         StringToUpper(chart_tf);
+         string req_tf = request.timeframe;
+         StringToUpper(req_tf);
+         tf_match = (chart_tf == req_tf);
         }
       if(symbol_match && tf_match)
         {

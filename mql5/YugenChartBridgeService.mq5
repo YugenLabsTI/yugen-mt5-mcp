@@ -1101,19 +1101,27 @@ string HandleRequest(const ChartBridgeRequest &request)
 // trailing newline, or "" on read error.
 string ReadJsonLine(const int handle)
   {
-   uchar  buf[];
-   ArrayResize(buf, 1);
+   // Read in bulk CHUNKS, not one byte per FileReadArray call. The previous
+   // byte-at-a-time loop fell into Sleep(2) between bytes whenever a 1-byte
+   // read returned 0; on Windows Sleep(2) rounds up to the ~15ms system timer
+   // tick, so a ~500-byte request cost ~7.5s (measured: read latency was
+   // linear at ~15ms/byte). Reading up to 4096 bytes per call drains all bytes
+   // currently buffered in the pipe in one shot, so we only Sleep when a read
+   // truly returns nothing. Latency drops from O(bytes * 15ms) to O(chunks).
+   uchar  chunk[];
+   ArrayResize(chunk, 4096);
    uchar  accum[];
    ArrayResize(accum, 0);
    int    acc_len = 0;
    uint   start_tick = GetTickCount();
+   bool   found_lf = false;
 
-   while(!IsStopped())
+   while(!IsStopped() && !found_lf)
      {
-      uint read_count = FileReadArray(handle, buf, 0, 1);
+      uint read_count = FileReadArray(handle, chunk, 0, 4096);
       if(read_count == 0)
         {
-         // No byte available YET. Do NOT break on FileIsEnding here: on a
+         // Nothing available YET. Do NOT break on FileIsEnding here: on a
          // named pipe it can report end-of-file while Python is still
          // streaming the request, which truncates the line (the request_id
          // near the end of the sorted JSON gets cut → parse_error). Wait and
@@ -1125,14 +1133,23 @@ string ReadJsonLine(const int handle)
          continue;
         }
       start_tick = GetTickCount();  // made progress — reset the deadline
-      uchar byte_val = buf[0];
-      if(byte_val == 0x0A)  // LF = end of JSON line
-         break;
-      ArrayResize(accum, acc_len + 1);
-      accum[acc_len] = byte_val;
-      acc_len++;
-      if(acc_len > 65536)  // safety cap: 64 KB max request
-         break;
+      for(uint i = 0; i < read_count; i++)
+        {
+         uchar byte_val = chunk[i];
+         if(byte_val == 0x0A)  // LF = end of JSON line. Trailing bytes (if any)
+           {                   // are ignored: protocol is one request per
+            found_lf = true;   // connection, so nothing follows the newline.
+            break;
+           }
+         ArrayResize(accum, acc_len + 1);
+         accum[acc_len] = byte_val;
+         acc_len++;
+         if(acc_len > 65536)  // safety cap: 64 KB max request
+           {
+            found_lf = true;
+            break;
+           }
+        }
      }
 
    if(acc_len == 0)

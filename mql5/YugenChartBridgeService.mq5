@@ -520,6 +520,7 @@ ENUM_OBJECT ResolveObjectType(const string type_str)
    if(upper == "VLINE")                         return OBJ_VLINE;
    if(upper == "TREND" || upper == "TRENDLINE") return OBJ_TREND;
    if(upper == "RECTANGLE" || upper == "RECT")  return OBJ_RECTANGLE;
+   if(upper == "TRIANGLE")                      return OBJ_TRIANGLE;
    if(upper == "TEXT")                          return OBJ_TEXT;
    if(upper == "ARROW")                         return OBJ_ARROW;
    if(upper == "LABEL")                         return OBJ_LABEL;
@@ -556,6 +557,7 @@ int ExpectedPointCount(const ENUM_OBJECT obj_type)
       case OBJ_RECTANGLE:   return 2;
       case OBJ_CHANNEL:     return 2;
       case OBJ_REGRESSION:  return 2;
+      case OBJ_TRIANGLE:    return 3;
       default:              return -1;  // any (handled by ObjectCreate default)
      }
   }
@@ -801,6 +803,38 @@ void ApplyProperties(
       bool ray_val = JsonGetBool(properties_json, "ray_right", false);
       ObjectSetInteger(chart_id, obj_name, OBJPROP_RAY_RIGHT, ray_val ? 1 : 0);
      }
+
+   // arrowcode (Wingdings char code for OBJ_ARROW). Without it an arrow is
+   // created but renders invisibly; ApplyCreateObject sets a default, this
+   // lets the caller override it.
+   if(StringFind(properties_json, "\"arrowcode\":") >= 0)
+     {
+      long ac = JsonGetLong(properties_json, "arrowcode", -1);
+      if(ac >= 0)
+         ObjectSetInteger(chart_id, obj_name, OBJPROP_ARROWCODE, ac);
+     }
+
+   // corner / xdistance / ydistance — pixel-anchored placement for objects
+   // that ignore time/price coordinates (OBJ_LABEL, OBJ_BUTTON, ...).
+   // corner: 0=upper-left, 1=upper-right, 2=lower-left, 3=lower-right.
+   if(StringFind(properties_json, "\"corner\":") >= 0)
+     {
+      long corner = JsonGetLong(properties_json, "corner", -1);
+      if(corner >= 0 && corner <= 3)
+         ObjectSetInteger(chart_id, obj_name, OBJPROP_CORNER, corner);
+     }
+   if(StringFind(properties_json, "\"xdistance\":") >= 0)
+     {
+      long xd = JsonGetLong(properties_json, "xdistance", -1);
+      if(xd >= 0)
+         ObjectSetInteger(chart_id, obj_name, OBJPROP_XDISTANCE, xd);
+     }
+   if(StringFind(properties_json, "\"ydistance\":") >= 0)
+     {
+      long yd = JsonGetLong(properties_json, "ydistance", -1);
+      if(yd >= 0)
+         ObjectSetInteger(chart_id, obj_name, OBJPROP_YDISTANCE, yd);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -897,6 +931,12 @@ bool ApplyCreateObject(
       SetObjectPoint(chart_id, request.object_name, 1, pts[1]);
    if(pt_count > 2)
       SetObjectPoint(chart_id, request.object_name, 2, pts[2]);
+
+   // OBJ_ARROW renders nothing without an arrow code. Set a visible default
+   // (Wingdings 241 = up arrow) BEFORE ApplyProperties so a bare
+   // draw_object(OBJ_ARROW) shows up; an explicit "arrowcode" property wins.
+   if(obj_type == OBJ_ARROW)
+      ObjectSetInteger(chart_id, request.object_name, OBJPROP_ARROWCODE, 241);
 
    // Apply properties
    ApplyProperties(chart_id, request.object_name, request.properties_json);
@@ -1033,6 +1073,59 @@ string HandleClearObjects(const ChartBridgeRequest &request)
   }
 
 //+------------------------------------------------------------------+
+//| Delete-object dispatch (action = "delete_object")               |
+//| Objects carry globally-unique names (yugen_<type>_<uuid>). When  |
+//| the selector is unpinned — wildcard "*" or empty symbol with no  |
+//| chart_id (the Python client sends "*" when no symbol is given) — |
+//| search EVERY open chart and delete the object wherever it lives, |
+//| mirroring clear_objects. A pinned selector deletes on that chart |
+//| only.                                                            |
+//+------------------------------------------------------------------+
+
+string HandleDeleteObject(const ChartBridgeRequest &request)
+  {
+   bool wildcard = (request.chart_id <= 0) &&
+                   (StringLen(request.symbol) == 0 || request.symbol == "*");
+
+   if(wildcard)
+     {
+      long c = ChartFirst();
+      while(c >= 0)
+        {
+         if(ObjectFind(c, request.object_name) >= 0)
+           {
+            bool ok = ObjectDelete(c, request.object_name);
+            ChartRedraw(c);
+            if(ok && ObjectFind(c, request.object_name) < 0)
+               return BuildAckResponse(
+                  request.request_id, request.action, true,
+                  StringFormat("{\"name\":\"%s\",\"deleted\":true}", request.object_name)
+               );
+           }
+         c = ChartNext(c);
+        }
+      // Not found on any open chart.
+      return BuildAckResponse(
+         request.request_id, request.action, false,
+         StringFormat("{\"name\":\"%s\",\"deleted\":false}", request.object_name),
+         "verify_failed", "Object not found on any open chart"
+      );
+     }
+
+   // Pinned selector — resolve a single chart and delete there.
+   long chart_id = -1;
+   if(!ResolveChart(request, chart_id))
+      return BuildErrorResponse(request.request_id, request.action,
+                                "chart_not_found", "Unable to resolve chart target");
+   string observed_json = "{}";
+   bool verified = ApplyDeleteObject(chart_id, request, observed_json);
+   if(!verified)
+      return BuildAckResponse(request.request_id, request.action, false, observed_json,
+                              "verify_failed", "Post-action verification failed");
+   return BuildAckResponse(request.request_id, request.action, true, observed_json);
+  }
+
+//+------------------------------------------------------------------+
 //| Main dispatch                                                    |
 //+------------------------------------------------------------------+
 
@@ -1056,6 +1149,10 @@ string HandleRequest(const ChartBridgeRequest &request)
    if(request.action == "clear_objects")
       return HandleClearObjects(request);
 
+   // ── delete_object (special: unpinned selector searches all charts) ──
+   if(request.action == "delete_object")
+      return HandleDeleteObject(request);
+
    // ── all other actions require chart resolution ─────────────────
    long chart_id = -1;
    if(!ResolveChart(request, chart_id))
@@ -1078,10 +1175,6 @@ string HandleRequest(const ChartBridgeRequest &request)
    else if(request.action == "update_object")
      {
       verified = ApplyUpdateObject(chart_id, request, observed_json);
-     }
-   else if(request.action == "delete_object")
-     {
-      verified = ApplyDeleteObject(chart_id, request, observed_json);
      }
    else
      {

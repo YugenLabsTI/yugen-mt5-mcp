@@ -8,6 +8,7 @@ audit directories, SQLite files, or audit rows while producing diagnostics.
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from .audit import AuditStore
-from .config import AppConfig, ConfigError
+from .config import AppConfig, ConfigError, TransportMode
 from .mt5_adapter import MT5Adapter, MT5AdapterError
 
 _REQUIRED_READ_TOOLS = frozenset(
@@ -134,6 +135,10 @@ def create_default_doctor(
             _CallableDoctorCheck(
                 "real_account_consent",
                 lambda: _check_real_account_consent(config),
+            ),
+            _CallableDoctorCheck(
+                "remote_transport",
+                lambda: _check_remote_transport(config),
             ),
         ),
     )
@@ -301,6 +306,114 @@ def _check_real_account_consent(config: AppConfig) -> DoctorCheckResult:
         severity=DoctorSeverity.INFO,
         summary="Real-account consent requires explicit per-session acknowledgement.",
         details={"consent_source": "session"},
+    )
+
+
+def _check_remote_transport(config: AppConfig) -> DoctorCheckResult:
+    """Passive posture check for the remote-transport configuration.
+
+    Reports trust tier, TLS status, allowlist breadth, and tiered warnings
+    without mutating any state or opening any sockets.  Never emits the
+    bearer-token value — it is deliberately omitted from all output.
+    """
+    remote = config.transport.remote
+
+    # Stdio mode — brief summary, no remote-transport warnings.
+    if config.transport.mode is not TransportMode.REMOTE or not remote.enabled:
+        return DoctorCheckResult(
+            name="remote_transport",
+            status=DoctorStatus.OK,
+            severity=DoctorSeverity.INFO,
+            summary="Transport mode is stdio; no remote-transport posture to evaluate.",
+            details={"mode": "stdio", "warnings": []},
+        )
+
+    # Determine trust tier.
+    try:
+        bind_ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(remote.host)
+        from .security import is_trusted_local_bind
+
+        trusted_local = is_trusted_local_bind(bind_ip)
+    except ValueError:
+        trusted_local = False
+    trust_tier = "trusted-local" if trusted_local else "public"
+
+    # Allowlist entries count — report "*" if the wildcard is present.
+    allowlist_entries: int | str = (
+        "*" if "*" in remote.allowlist else len(remote.allowlist)
+    )
+
+    warnings: list[str] = []
+    status = DoctorStatus.OK
+    severity = DoctorSeverity.INFO
+
+    # Tiered warning rules (spec §6.2).
+    if not trusted_local and not remote.tls_terminated and remote.allow_insecure:
+        # CRITICAL: public bind, no TLS, ALLOW_INSECURE active.
+        warnings.append(
+            "INSECURE: public bind without TLS — token is transmitted in cleartext"
+        )
+        status = DoctorStatus.FAIL
+        severity = DoctorSeverity.CRITICAL
+    elif not trusted_local and remote.tls_terminated and "*" in remote.allowlist:
+        # WARNING: public bind, TLS present, but allowlist is open.
+        warnings.append(
+            "allowlist is open (*) — any IP may attempt connection; token is the only gate"
+        )
+        status = DoctorStatus.WARN
+        severity = DoctorSeverity.WARNING
+    elif trusted_local and "*" in remote.allowlist:
+        # INFO: trusted-local bind with open allowlist.
+        warnings.append(
+            "allowlist is open (*) on trusted-local bind — consider restricting to known CIDRs"
+        )
+        # Status stays OK / INFO; warning is surfaced in details only.
+
+    details: dict[str, object] = {
+        "mode": "remote",
+        "bind": f"{remote.host}:{remote.port}",
+        "trust_tier": trust_tier,
+        "tls_terminated": remote.tls_terminated,
+        "stateless_http": remote.stateless_http,
+        "allowlist_entries": allowlist_entries,
+        "warnings": warnings,
+    }
+
+    if status is DoctorStatus.OK and not warnings:
+        summary = (
+            f"Remote transport posture is healthy "
+            f"(bind={remote.host}:{remote.port}, tier={trust_tier})."
+        )
+    elif status is DoctorStatus.OK and warnings:
+        summary = (
+            f"Remote transport posture has informational notes "
+            f"(bind={remote.host}:{remote.port}, tier={trust_tier})."
+        )
+    elif status is DoctorStatus.WARN:
+        summary = (
+            f"Remote transport posture has warnings "
+            f"(bind={remote.host}:{remote.port}, tier={trust_tier})."
+        )
+    else:
+        summary = (
+            f"Remote transport posture is CRITICAL "
+            f"(bind={remote.host}:{remote.port}, tier={trust_tier}): "
+            + "; ".join(warnings)
+        )
+
+    return DoctorCheckResult(
+        name="remote_transport",
+        status=status,
+        severity=severity,
+        summary=summary,
+        details=details,
+        remediation=(
+            "Enable TLS termination via a reverse proxy (Caddy, nginx, cloud LB) "
+            "and set YUGEN_MT5_REMOTE_TLS_TERMINATED=true, or restrict to a "
+            "trusted-local bind address."
+        )
+        if status is not DoctorStatus.OK
+        else None,
     )
 
 

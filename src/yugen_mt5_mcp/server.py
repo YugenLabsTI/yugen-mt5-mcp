@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
-from typing import cast
+from typing import Annotated, cast
 from uuid import uuid4
 
 from fastmcp import FastMCP
+from pydantic import BeforeValidator
 
 from .chart_bridge import (
     ChartBridgeClient,
@@ -69,6 +71,33 @@ CHART_TOOL_NAMES = (
 
 
 _YUGEN_PREFIX = "yugen_"
+
+
+def _coerce_json_arg(value: object) -> object:
+    """Coerce a JSON-string tool argument into its parsed object.
+
+    Some MCP clients (notably Claude Desktop) serialize nested object/array
+    arguments as JSON strings rather than native JSON. FastMCP/Pydantic then
+    rejects them against a dict/list schema before the tool body runs
+    (``N validation errors ... input_type=str``). Parsing a string argument
+    here restores the structured value; non-strings pass through untouched so
+    native dict/list callers are unaffected. A string that is not valid JSON is
+    returned as-is, letting downstream validation emit a clean error.
+    """
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:  # json.JSONDecodeError is a ValueError subclass
+            return value
+    return value
+
+
+# Tool-arg aliases that tolerate JSON-string-encoded nested values. The
+# BeforeValidator runs on the RAW input before the dict/list/None union is
+# validated, so a stringified object/array is parsed back into structure first.
+_OptionalJsonObject = Annotated[dict[str, object] | None, BeforeValidator(_coerce_json_arg)]
+_JsonObject = Annotated[dict[str, object], BeforeValidator(_coerce_json_arg)]
+_JsonObjectList = Annotated[list[dict[str, object]], BeforeValidator(_coerce_json_arg)]
 
 
 def _chart_error_response(error: ChartBridgeError) -> dict[str, object]:
@@ -215,8 +244,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient | None) -
     @mcp.tool
     def draw_trend_line(
         symbol: str,
-        point1: dict[str, object] | None,
-        point2: dict[str, object] | None,
+        point1: _OptionalJsonObject,
+        point2: _OptionalJsonObject,
         label: str = "",
     ) -> object:
         """Draw a trend line between two anchor points (each with time and price)."""
@@ -290,8 +319,8 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient | None) -
     @mcp.tool
     def draw_object(
         object_type: str,
-        properties: dict[str, object],
-        points: list[dict[str, object]],
+        properties: _JsonObject,
+        points: _JsonObjectList,
         symbol: str | None = None,
         chart_id: int | None = None,
     ) -> object:

@@ -525,6 +525,59 @@ class TestChartToolsDisabledBehavior:
 # S-C2-1: draw_trend_line — absent/None price must be rejected (not silently 0.0)
 # ---------------------------------------------------------------------------
 
+class TestNestedObjectArgsAsJsonStrings:
+    """Regression: some MCP clients (e.g. Claude Desktop) serialize nested
+    object/array tool arguments as JSON STRINGS instead of native JSON objects.
+    FastMCP/Pydantic then rejects them against the dict/list schema before the
+    tool body runs (``N validation errors ... input_type=str``). The tools must
+    coerce a JSON-string argument back into the structured value.
+    """
+
+    def test_draw_trend_line_accepts_points_as_json_strings(self, tmp_path: Path) -> None:
+        client = _fake_client(tmp_path)
+        ack = ChartBridgeAck(request_id="r1", action="create_object", status="ok", verified=True)
+        client.create_object = MagicMock(return_value=ack)  # type: ignore[method-assign]
+
+        mcp = FastMCP(name="test")
+        register_chart_tools(mcp, client)
+        result = _call_tool(mcp, "draw_trend_line", {
+            "symbol": "USDJPY",
+            "point1": json.dumps({"time": "2026-06-01T08:00:00Z", "price": 156.5}),
+            "point2": json.dumps({"time": "2026-06-02T12:00:00Z", "price": 157.2}),
+        })
+
+        assert result["status"] == "ok"
+        assert result["name"].startswith("yugen_trend_")
+        spec = client.create_object.call_args.kwargs["object_spec"]
+        assert spec.points[0].price == 156.5
+        assert spec.points[1].price == 157.2
+
+    def test_draw_object_accepts_points_and_properties_as_json_strings(
+        self, tmp_path: Path
+    ) -> None:
+        client = _fake_client(tmp_path)
+        ack = ChartBridgeAck(request_id="r1", action="create_object", status="ok", verified=True)
+        client.create_object = MagicMock(return_value=ack)  # type: ignore[method-assign]
+
+        mcp = FastMCP(name="test")
+        register_chart_tools(mcp, client)
+        result = _call_tool(mcp, "draw_object", {
+            "object_type": "TREND",
+            "properties": json.dumps({"color": "blue", "width": 2}),
+            "points": json.dumps([
+                {"time": "2026-06-01T08:00:00Z", "price": 156.5},
+                {"time": "2026-06-02T12:00:00Z", "price": 157.2},
+            ]),
+            "symbol": "USDJPY",
+        })
+
+        assert result["status"] == "ok"
+        assert result["name"].startswith("yugen_obj_")
+        spec = client.create_object.call_args.kwargs["object_spec"]
+        assert len(spec.points) == 2
+        assert spec.properties.get("color") == "blue"
+
+
 class TestDrawTrendLineAbsentPrice:
     """S-C2-1: absent or None price in a trend line point must be rejected with invalid_params."""
 

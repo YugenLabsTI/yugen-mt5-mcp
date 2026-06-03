@@ -1143,6 +1143,38 @@ void WriteJsonLine(const int handle, const string response)
 
 void OnStart()
   {
+   //=== TEMP HMAC GOLDEN-VECTOR SELF-TEST — remove this whole block after QA ==
+   //  Runs WITHOUT the MCP. Read the Experts/Journal tab and compare each
+   //  "got" line to the "exp" line below it. All three must match exactly
+   //  (64-char lowercase hex). Then delete this block and recompile.
+   Print("=== HMAC golden-vector self-test ===");
+
+   string hmac_v1 = HmacSha256("super-secret",
+                               "2026-05-31:chart-abc123:create_object:chart-abc123");
+   Print("V1 got: ", hmac_v1);
+   Print("V1 exp: d4b80b74858ce0d87d6ccd9fbcf546686b2014b66b97d932f6fb2f8fe0513a36");
+
+   // 80-char key (>64 bytes) forces the K' = SHA256(K) branch.
+   string hmac_longkey = "xxxxxxxxxx" + "xxxxxxxxxx" + "xxxxxxxxxx" + "xxxxxxxxxx"
+                       + "xxxxxxxxxx" + "xxxxxxxxxx" + "xxxxxxxxxx" + "xxxxxxxxxx";
+   string hmac_v2 = HmacSha256(hmac_longkey,
+                               "2026-05-31:chart-long-key:list_charts:chart-long-key");
+   Print("V2 got: ", hmac_v2);
+   Print("V2 exp: 9aca2dab932142034bc63dbad5ab35ad0e87f1ee314f0b07c42932377e1b0abe");
+
+   // Build "cle-secrete-EUR" (clé-secrète-€) from code points so the source
+   // file encoding cannot distort this multibyte-UTF-8 vector.
+   string hmac_utf8key = "cl" + ShortToString(0x00E9) + "-secr" + ShortToString(0x00E8)
+                       + "te-" + ShortToString(0x20AC);
+   string hmac_v3 = HmacSha256(hmac_utf8key,
+                               "2026-05-31:chart-utf8:delete_object:idem-utf8");
+   Print("V3 got: ", hmac_v3);
+   Print("V3 exp: c792b09aea5b65f0b035c09008f8c75201188171532880f8ce523f38936455b5");
+
+   Print("=== end HMAC self-test — remove this block after verifying ===");
+   return; // stop here during the self-test; do NOT enter the pipe loop
+   //=========================================================================
+
    if(StringLen(SharedSecret) == 0)
      {
       Print("YugenChartBridgeService: ERROR — SharedSecret input is empty. "

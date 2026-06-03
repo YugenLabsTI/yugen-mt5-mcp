@@ -15,14 +15,13 @@ from pathlib import Path
 import pytest
 
 from yugen_mt5_mcp.audit import REDACTED, AuditStore
-from yugen_mt5_mcp.config import AppConfig, ConfigError, RemoteTransportConfig
+from yugen_mt5_mcp.config import AppConfig, RemoteTransportConfig
 from yugen_mt5_mcp.security import (
     RemoteRequestIdentity,
     RemoteSecurityError,
     RemoteSecurityManager,
     validate_remote_transport_config,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

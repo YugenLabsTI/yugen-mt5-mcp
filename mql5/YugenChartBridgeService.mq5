@@ -566,8 +566,40 @@ int ExpectedPointCount(const ENUM_OBJECT obj_type)
 //| Color string → clrXxx mapping                                   |
 //+------------------------------------------------------------------+
 
+// Hex digit → value (0-15), or -1 if the char is not a hex digit.
+int HexDigit(const ushort ch)
+  {
+   if(ch >= '0' && ch <= '9') return (int)(ch - '0');
+   if(ch >= 'a' && ch <= 'f') return (int)(ch - 'a' + 10);
+   if(ch >= 'A' && ch <= 'F') return (int)(ch - 'A' + 10);
+   return -1;
+  }
+
+// Parse two hex chars at position pos into a byte (0-255), or -1 on bad input.
+int HexByte(const string s, const int pos)
+  {
+   int hi = HexDigit(StringGetCharacter(s, pos));
+   int lo = HexDigit(StringGetCharacter(s, pos + 1));
+   if(hi < 0 || lo < 0) return -1;
+   return hi * 16 + lo;
+  }
+
 color MapColorName(const string color_str)
   {
+   // "#RRGGBB" hex → RGB (the universal web convention), converted to MQL5's
+   // native 0x00BBGGRR byte order so callers can pass intuitive RGB hex instead
+   // of MQL5's BGR integers (e.g. "#FF0000" = red, "#0000FF" = blue). Named
+   // colors and bare/0x integers are unchanged — a bare decimal stays a raw
+   // MQL5 color int for power users who already know the BGR ordering.
+   if(StringLen(color_str) == 7 && StringGetCharacter(color_str, 0) == '#')
+     {
+      int r = HexByte(color_str, 1);
+      int g = HexByte(color_str, 3);
+      int b = HexByte(color_str, 5);
+      if(r >= 0 && g >= 0 && b >= 0)
+         return (color)(r | (g << 8) | (b << 16));
+     }
+
    string lower = color_str;
    StringToLower(lower);
    if(lower == "red")       return clrRed;

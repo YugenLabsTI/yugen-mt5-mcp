@@ -1091,19 +1091,25 @@ string ReadJsonLine(const int handle)
    uchar  accum[];
    ArrayResize(accum, 0);
    int    acc_len = 0;
+   uint   start_tick = GetTickCount();
 
    while(!IsStopped())
      {
       uint read_count = FileReadArray(handle, buf, 0, 1);
       if(read_count == 0)
         {
-         // No data yet — check for EOF / error
-         if(FileIsEnding(handle))
+         // No byte available YET. Do NOT break on FileIsEnding here: on a
+         // named pipe it can report end-of-file while Python is still
+         // streaming the request, which truncates the line (the request_id
+         // near the end of the sorted JSON gets cut → parse_error). Wait and
+         // retry until the newline arrives, bounded by a safety deadline so a
+         // genuinely dead peer cannot hang the service forever.
+         if(GetTickCount() - start_tick > 5000)  // 5s no-progress deadline
             break;
-         // Short sleep to avoid spinning
-         Sleep(5);
+         Sleep(2);
          continue;
         }
+      start_tick = GetTickCount();  // made progress — reset the deadline
       uchar byte_val = buf[0];
       if(byte_val == 0x0A)  // LF = end of JSON line
          break;

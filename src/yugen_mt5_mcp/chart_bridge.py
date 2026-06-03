@@ -94,7 +94,9 @@ class ChartSelector:
         if self.chart_id is not None:
             payload["chart_id"] = self.chart_id
         if self.symbol is not None and self.symbol.strip():
-            payload["symbol"] = self.symbol.strip().upper()
+            # Preserve case: MT5 symbol names are case-sensitive. The MQL5 bridge
+            # matches charts case-insensitively, so no uppercasing is needed here.
+            payload["symbol"] = self.symbol.strip()
         if self.timeframe is not None and self.timeframe.strip():
             payload["timeframe"] = self.timeframe.strip().upper()
         if not payload:
@@ -272,7 +274,8 @@ class ChartBridgeClient:
         )
         if symbol is not None:
             payload = dict(payload)
-            payload["chart_selector"] = {"symbol": symbol.strip().upper()}
+            # Preserve case (MT5 symbols are case-sensitive; MQL5 matches insensitively).
+            payload["chart_selector"] = {"symbol": symbol.strip()}
         try:
             response = self._round_trip(payload)
             deleted_count = int(response.get("deleted_count", 0))

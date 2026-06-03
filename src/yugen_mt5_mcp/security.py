@@ -59,8 +59,10 @@ class DemoSmokeControls:
             )
 
         raw_symbols = env.get(DEMO_SMOKE_SYMBOLS_ENV, ",".join(DEFAULT_DEMO_SMOKE_SYMBOLS))
+        # Preserve case: MT5 symbol names are case-sensitive. Matching is done
+        # case-insensitively in validate_request; we keep the configured casing.
         allowed_symbols = tuple(
-            symbol.strip().upper() for symbol in raw_symbols.split(",") if symbol.strip()
+            symbol.strip() for symbol in raw_symbols.split(",") if symbol.strip()
         )
         if not allowed_symbols:
             raise RemoteSecurityError("demo smoke requires at least one allowed symbol")
@@ -85,14 +87,23 @@ class DemoSmokeControls:
             raise RemoteSecurityError("demo smoke cannot run against real accounts")
 
     def validate_request(self, *, symbol: str, volume: Decimal) -> str:
-        normalized = symbol.strip().upper()
-        if normalized not in self.allowed_symbols:
+        requested = symbol.strip()
+        matched = next(
+            (
+                allowed
+                for allowed in self.allowed_symbols
+                if requested.casefold() == allowed.casefold()
+            ),
+            None,
+        )
+        if matched is None:
             raise RemoteSecurityError(
-                f"symbol is not in the demo smoke allowlist: {normalized}"
+                f"symbol is not in the demo smoke allowlist: {requested}"
             )
         if volume <= 0 or volume > self.max_volume:
             raise RemoteSecurityError("demo smoke volume exceeds the configured max volume")
-        return normalized
+        # Return the configured-case symbol (MT5 is case-sensitive); never uppercased.
+        return matched
 
 
 class RemoteSecurityManager:

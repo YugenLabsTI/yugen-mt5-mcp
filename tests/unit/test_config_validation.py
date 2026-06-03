@@ -20,13 +20,19 @@ def test_default_config_is_stdio_and_safe() -> None:
     ("payload", "message"),
     [
         (
+            # Public bind (8.8.8.8) with no TLS and no allow_insecure → must reject.
             {
                 "transport": {
                     "mode": "remote",
-                    "remote": {"enabled": True, "bearer_token": "secret-token"},
+                    "remote": {
+                        "enabled": True,
+                        "host": "8.8.8.8",
+                        "bearer_token": "secret-token",
+                        "allowlist": ["8.8.8.0/24"],
+                    },
                 }
             },
-            "TLS termination",
+            "TLS",
         ),
         (
             {
@@ -38,19 +44,20 @@ def test_default_config_is_stdio_and_safe() -> None:
             "bearer token",
         ),
         (
+            # Public bind (0.0.0.0) with no TLS and no allow_insecure → must reject.
+            # Note: 0.0.0.0 is now public tier (not instant fatal); TLS required.
             {
                 "transport": {
                     "mode": "remote",
                     "remote": {
                         "enabled": True,
                         "host": "0.0.0.0",
-                        "tls_terminated": True,
-                        "reverse_proxy": "caddy",
                         "bearer_token": "secret-token",
+                        "allowlist": ["0.0.0.0/0"],
                     },
                 }
             },
-            "wildcard bind",
+            "TLS",
         ),
     ],
 )

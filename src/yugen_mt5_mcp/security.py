@@ -240,10 +240,6 @@ def _parse_network(value: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
         raise RemoteSecurityError(f"invalid allowlist entry: {value}") from error
 
 
-def _is_safe_bind_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    return address.is_loopback or address.is_private
-
-
 # RFC 1918 private ranges (IPv4) and ULA (IPv6) — used for trust-tier determination.
 # Python 3.11 changed is_private to cover documentation/test ranges (RFC 5737 etc.)
 # which are NOT operator LAN addresses.  We pin to RFC 1918 + loopback explicitly.

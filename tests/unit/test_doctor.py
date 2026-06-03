@@ -110,6 +110,7 @@ def test_create_default_doctor_reports_healthy_passive_runtime(tmp_path: Path) -
         "read_tools",
         "runtime_context",
         "real_account_consent",
+        "remote_transport",
     ]
     assert all(check.status is DoctorStatus.OK for check in report.checks)
 

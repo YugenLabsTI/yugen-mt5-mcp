@@ -511,6 +511,11 @@ ENUM_OBJECT ResolveObjectType(const string type_str)
   {
    string upper = type_str;
    StringToUpper(upper);
+   // Accept the canonical MQL5 enum names too ("OBJ_TREND", "OBJ_ARROW", ...).
+   // Callers reading the MT5 docs naturally pass the OBJ_-prefixed constant;
+   // strip the prefix so both "TREND" and "OBJ_TREND" map to the same type.
+   if(StringFind(upper, "OBJ_") == 0)
+      upper = StringSubstr(upper, 4);
    if(upper == "HLINE")                         return OBJ_HLINE;
    if(upper == "VLINE")                         return OBJ_VLINE;
    if(upper == "TREND" || upper == "TRENDLINE") return OBJ_TREND;

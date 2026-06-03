@@ -248,12 +248,12 @@ def _is_safe_bind_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address
 # Python 3.11 changed is_private to cover documentation/test ranges (RFC 5737 etc.)
 # which are NOT operator LAN addresses.  We pin to RFC 1918 + loopback explicitly.
 _RFC1918_V4: tuple[ipaddress.IPv4Network, ...] = (
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
 )
 _RFC4193_V6: tuple[ipaddress.IPv6Network, ...] = (
-    ipaddress.ip_network("fc00::/7"),
+    ipaddress.IPv6Network("fc00::/7"),
 )
 
 

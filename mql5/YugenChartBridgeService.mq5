@@ -1181,6 +1181,8 @@ void OnStart()
       // ── Connected for this request ─────────────────────────────
       string json_line = ReadJsonLine(handle);
 
+      Print("[DBG] len=", StringLen(json_line), " line=", json_line);  // TEMP DEBUG
+
       if(StringLen(json_line) == 0)
         {
          // Empty read — close and retry
@@ -1190,7 +1192,13 @@ void OnStart()
 
       ChartBridgeRequest request;
       string response;
-      if(!ParseRequest(json_line, request))
+      bool parsed = ParseRequest(json_line, request);
+      Print("[DBG] parsed=", parsed,
+            " action=[", request.action, "]",
+            " req_id=[", request.request_id, "]",
+            " obj_name=[", request.object_name, "]",
+            " obj_type=[", request.object_type, "]");  // TEMP DEBUG
+      if(!parsed)
         {
          // Could not parse — reply with a generic error so Python
          // does not block waiting for the ACK.
@@ -1203,6 +1211,8 @@ void OnStart()
         {
          response = HandleRequest(request);
         }
+
+      Print("[DBG] response=", response);  // TEMP DEBUG
 
       WriteJsonLine(handle, response);
       FileClose(handle);

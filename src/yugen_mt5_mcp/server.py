@@ -326,6 +326,23 @@ def register_chart_tools(mcp: FastMCP, chart_client: ChartBridgeClient | None) -
     ) -> object:
         """Generic pass-through to draw any MQL5 object type. Name is always yugen_obj_* prefixed.
 
+        ``object_type`` accepts short ("TREND", "HLINE", "TRIANGLE", ...) or the
+        canonical MQL5 enum name ("OBJ_TREND", ...). ``points`` is a list of
+        ``{time, price}`` (or ``{index, price}``) anchors; the count must match
+        the object (e.g. TREND/RECTANGLE=2, TRIANGLE=3, HLINE/ARROW/LABEL=1).
+
+        Recognized ``properties`` keys (all optional):
+          - ``color``: name ("red"), ``"#RRGGBB"`` RGB hex ("#FF0000" = red), or
+            a raw MQL5 integer (BGR order — prefer the hex form to avoid surprises)
+          - ``style``: solid | dash | dot | dashdot | dashdotdot
+          - ``width``: 1–5
+          - ``text``: label/text content;   ``fontsize``: int;   ``description``: tooltip
+          - ``fill``: bool (rectangles);   ``ray_right``: bool (trend lines)
+          - ``arrowcode``: Wingdings int for OBJ_ARROW (default 241)
+          - ``corner``: ENUM_BASE_CORNER 0=left-upper, 1=left-lower, 2=right-lower,
+            3=right-upper; with ``xdistance``/``ydistance`` (pixels) for pixel-anchored
+            objects like OBJ_LABEL
+
         Ownership: the generated name is always ``yugen_obj_<uuid>`` so the safety boundary
         holds even on the generic path.
         """

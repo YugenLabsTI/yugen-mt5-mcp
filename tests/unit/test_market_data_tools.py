@@ -288,6 +288,7 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
         "read_tools",
         "runtime_context",
         "real_account_consent",
+        "remote_transport",
     ]
     runtime_ctx = next(c for c in checks if c["name"] == "runtime_context")
     assert runtime_ctx["details"] == {

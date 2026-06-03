@@ -146,7 +146,7 @@ def test_create_object_requires_verified_ack_and_targets_chart(tmp_path: Path) -
     request = json.loads(sent_requests[0].decode("utf-8"))
     assert request["chart_selector"] == {
         "chart_id": 77,
-        "symbol": "EURUSD",
+        "symbol": "eurusd",
         "timeframe": "M5",
     }
     assert request["object"] == {

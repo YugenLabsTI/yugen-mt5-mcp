@@ -116,6 +116,36 @@ def test_explicit_allowlist_preserves_configured_symbol_casing(tmp_path: Path) -
     assert tick.symbol == "Boom 1000 Index"
 
 
+def test_no_allowlist_preserves_broker_symbol_casing(tmp_path: Path) -> None:
+    """No allowlist configured must NOT uppercase: MT5 symbols are case-sensitive.
+
+    Regression: the no-allowlist fallback used to ``return requested.upper()``,
+    turning "Boom 1000 Index" into "BOOM 1000 INDEX" and breaking symbol_select
+    for every mixed-case Deriv instrument.
+    """
+    audit_path = tmp_path / "audit.sqlite3"
+    config = AppConfig(risk=RiskConfig(allowed_symbols=()))
+    backend = FakeMT5Backend()
+    backend.symbols.append(FakeMT5Symbol(name="Boom 1000 Index", path="Synthetic"))
+    backend.ticks["Boom 1000 Index"] = FakeMT5Tick(
+        bid=1000.1,
+        ask=1000.2,
+        last=1000.15,
+        time=1_704_110_400,
+    )
+    adapter = MT5Adapter(backend=backend)
+    service = MarketDataService(
+        config=config,
+        adapter=adapter,
+        audit_store=AuditStore(audit_path),
+    )
+
+    tick = service.get_tick(symbol="boom 1000 index")
+
+    assert tick.symbol == "Boom 1000 Index"
+    assert backend.selected_symbols[-1] == "Boom 1000 Index"
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

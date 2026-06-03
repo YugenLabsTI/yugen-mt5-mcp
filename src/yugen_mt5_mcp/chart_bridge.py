@@ -395,7 +395,12 @@ class ChartBridgeClient:
 
     def _round_trip(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
         """Send one request line via the injected transport; parse the JSON response."""
-        raw_request = (json.dumps(dict(payload), sort_keys=True) + "\n").encode("utf-8")
+        # Compact separators (no space after ':' or ','): the MQL5 Service's
+        # minimal JSON parser matches the bare "key":" / "key": token, so the
+        # default json.dumps ': ' spacing would make every field unparseable.
+        raw_request = (
+            json.dumps(dict(payload), sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
         # Transport raises ChartBridgeTimeoutError / ChartBridgeError on failure.
         raw_response = self._transport.exchange(
             raw_request, timeout_seconds=self._config.timeout_seconds

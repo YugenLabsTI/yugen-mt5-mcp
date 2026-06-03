@@ -816,7 +816,8 @@ void ApplyProperties(
 
    // corner / xdistance / ydistance — pixel-anchored placement for objects
    // that ignore time/price coordinates (OBJ_LABEL, OBJ_BUTTON, ...).
-   // corner: 0=upper-left, 1=upper-right, 2=lower-left, 3=lower-right.
+   // corner = MQL5 ENUM_BASE_CORNER (verified live): 0=left-upper,
+   // 1=left-lower, 2=right-lower, 3=right-upper.
    if(StringFind(properties_json, "\"corner\":") >= 0)
      {
       long corner = JsonGetLong(properties_json, "corner", -1);

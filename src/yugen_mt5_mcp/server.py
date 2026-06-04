@@ -25,6 +25,7 @@ from .chart_bridge import (
 from .config import AppConfig, RemoteTransportConfig
 from .doctor import DoctorService
 from .market_data import MarketDataService, to_payload
+from .mt5_adapter import MT5Adapter
 from .remote import BearerIPAuthMiddleware, trust_proxy_headers_for_bind
 from .security import RemoteSecurityManager
 from .session import SessionRiskStore
@@ -797,6 +798,7 @@ def create_server(
     market_data: MarketDataService,
     doctor_service: DoctorService | None = None,
     *,
+    adapter: MT5Adapter | None = None,
     trading_service: TradingService | None = None,
     bulk_service: BulkTradeService | None = None,
     session_store: SessionRiskStore | None = None,
@@ -824,4 +826,8 @@ def create_server(
     # bridge is disabled; each tool returns a typed service_unavailable error on
     # invocation without contacting the bridge. The tool surface is always visible.
     register_chart_tools(mcp, chart_client)
+    # REQ-4.1 / REQ-4.2: reconnect_mt5 tool stub — no-op until slice 2 (T-09).
+    # The adapter is stored here so T-09 can wire the tool without restructuring.
+    # register_reconnect_tool(mcp, adapter) will be called here in slice 2.
+    del adapter  # suppress unused-arg until T-09 is implemented
     return mcp

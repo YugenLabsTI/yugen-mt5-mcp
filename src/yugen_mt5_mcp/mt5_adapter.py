@@ -9,6 +9,15 @@ from enum import StrEnum
 from threading import Lock
 from typing import Any, Protocol, TypeVar, cast
 
+# ---------------------------------------------------------------------------
+# Stale-IPC error code allowlist (REQ-2.3)
+# ---------------------------------------------------------------------------
+# APPLY-TIME NOTE: this allowlist must be validated against a live terminal.
+# -10004 = "No IPC connection" is the only confirmed code.
+# Other candidates (-10003 "no connection", -10005 "timeout") need live-terminal
+# confirmation before being added here.  Unknown codes intentionally fail loud.
+STALE_IPC_ERROR_CODES: frozenset[int] = frozenset({-10004})
+
 TResult = TypeVar("TResult")
 
 
@@ -147,6 +156,22 @@ class TradeResult:
     price: float
 
 
+@dataclass(slots=True, frozen=True)
+class ConnectionState:
+    """Canonical, shared connection-state shape (REQ-1.3, REQ-5.2, REQ-5.3).
+
+    Used by both ``connection_state()`` probe (observed by doctor) and the
+    ``reconnect_mt5`` tool response.  A single definition prevents structural
+    drift between the two consumers.
+    """
+
+    connected: bool
+    last_error_code: int
+    last_error_detail: str
+    reconnect_attempts: int
+    last_reconnect_at: datetime | None
+
+
 class MetaTrader5API(Protocol):
     TIMEFRAME_M1: int
     TIMEFRAME_M5: int
@@ -187,6 +212,11 @@ class MetaTrader5API(Protocol):
     def order_check(self, request: Mapping[str, object]) -> object | None: ...
     def order_send(self, request: Mapping[str, object]) -> object | None: ...
     def last_error(self) -> tuple[int, str]: ...
+    # REQ-1.1 / REQ-8.2: initialize and shutdown must be on the Protocol so
+    # _reconnect() can call them type-safely.  Both exist on FakeMT5Backend and
+    # the real MetaTrader5 module; they were previously absent from this Protocol.
+    def initialize(self) -> bool: ...
+    def shutdown(self) -> None: ...
 
 
 def _get_attr(payload: object, key: str) -> Any:
@@ -223,6 +253,10 @@ class MT5Adapter:
     def __init__(self, backend: MetaTrader5API | None = None) -> None:
         self._backend = backend or load_default_backend()
         self._lock = Lock()
+        # Reconnect tracking — initialized here, mutated by _reconnect() in slice 2.
+        # REQ-1.3: both fields MUST be present from construction.
+        self._reconnect_attempts: int = 0
+        self._last_reconnect_at: datetime | None = None
 
     @property
     def trade_action_deal(self) -> int:
@@ -468,6 +502,46 @@ class MT5Adapter:
             volume=_as_float(row, "volume"),
             price=_as_float(row, "price"),
         )
+
+    # ------------------------------------------------------------------
+    # Connection-state probe (T-03 / REQ-1.3, REQ-5.2, REQ-5.3)
+    # ------------------------------------------------------------------
+
+    def connection_state(self) -> ConnectionState:
+        """Read-only probe: report current IPC connection health.
+
+        Calls ``backend.account_info()`` under the lock to determine liveness.
+        On None, reads ``last_error()`` for the error tuple.
+        NEVER calls ``_reconnect()`` — this method only observes.
+        """
+        with self._lock:
+            result = self._backend.account_info()
+            if result is None:
+                code, detail = self._backend.last_error()
+                connected = False
+            else:
+                code, detail = 0, "OK"
+                connected = True
+        return ConnectionState(
+            connected=connected,
+            last_error_code=code,
+            last_error_detail=detail,
+            reconnect_attempts=self._reconnect_attempts,
+            last_reconnect_at=self._last_reconnect_at,
+        )
+
+    # ------------------------------------------------------------------
+    # Stale-IPC detection (T-06 / REQ-2.2, REQ-2.3)
+    # ------------------------------------------------------------------
+
+    def _is_stale_ipc(self) -> bool:
+        """Return True iff the last backend error code is a known stale-IPC code.
+
+        Unknown codes return False so callers can fail loud via existing
+        ``_backend_error`` path — no silent swallow of unrelated errors.
+        """
+        code, _detail = self._backend.last_error()
+        return code in STALE_IPC_ERROR_CODES
 
     def _timeframe_code(self, timeframe: Timeframe) -> int:
         mapping = {

@@ -314,12 +314,12 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
     assert [check["name"] for check in checks] == [
         "config",
         "audit_path",
+        "runtime_context",
+        "remote_transport",
         "mt5_connection",
         "mt5_account",
-        "read_tools",
-        "runtime_context",
         "real_account_consent",
-        "remote_transport",
+        "read_tools",
     ]
     runtime_ctx = next(c for c in checks if c["name"] == "runtime_context")
     assert runtime_ctx["details"] == {

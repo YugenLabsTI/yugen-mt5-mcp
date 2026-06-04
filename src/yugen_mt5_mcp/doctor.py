@@ -189,20 +189,20 @@ def create_default_doctor(
                 "audit_path",
                 lambda: _check_audit_path(audit_store.database_path),
             ),
-            *mt5_checks,
-            *read_tools_checks,
             _CallableDoctorCheck(
                 "runtime_context",
                 lambda: _check_runtime_context(config, entrypoint_warnings),
             ),
             _CallableDoctorCheck(
-                "real_account_consent",
-                lambda: _check_real_account_consent(config),
-            ),
-            _CallableDoctorCheck(
                 "remote_transport",
                 lambda: _check_remote_transport(config),
             ),
+            *mt5_checks,
+            _CallableDoctorCheck(
+                "real_account_consent",
+                lambda: _check_real_account_consent(config),
+            ),
+            *read_tools_checks,
         ),
     )
     if include_platform:

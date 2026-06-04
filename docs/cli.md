@@ -35,13 +35,14 @@ Default transport is `stdio`. Use `--transport remote` to start the HTTP transpo
 | `--transport`, `-t` | `stdio` | Transport mode: `stdio` or `remote`. |
 | `--host` | `127.0.0.1` | Bind address for remote transport. Only used when `--transport remote`. |
 | `--port`, `-p` | `8765` | Port for remote transport. Only used when `--transport remote`. |
+| `--env-file` | _(none)_ | Load configuration from a dotenv file instead of exporting each variable by hand. Real environment variables take precedence over the file. |
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | Server exited cleanly. |
-| `1` | Invalid transport value, or remote transport requested without `uvicorn` installed. |
+| `1` | Invalid transport value, remote transport requested without `uvicorn` installed, or `--env-file` path not found. |
 
 ### Examples
 
@@ -54,7 +55,15 @@ yugen-mt5-mcp run --transport remote
 
 # Remote mode on a custom host and port
 yugen-mt5-mcp run --transport remote --host 0.0.0.0 --port 9000
+
+# Load configuration from a dotenv file (switch demo/real profiles easily)
+yugen-mt5-mcp run --env-file ./demo.env
 ```
+
+> **Production note:** when running as a service on a VPS, prefer letting the
+> process manager inject the environment (systemd `EnvironmentFile=`, or
+> `docker run --env-file`) over `--env-file`. Keep secret-bearing env files at
+> `chmod 600` and never commit them.
 
 Install the remote extra before using `--transport remote`:
 

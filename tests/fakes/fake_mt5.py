@@ -133,6 +133,16 @@ class FakeMT5Backend:
         self.initialized = False
         self.shutdown_called = False
         self._last_error: tuple[int, str] = (0, "OK")
+        # REQ-8.1: disconnected simulation support (T-11)
+        # When True, read methods return None and last_error returns -10004.
+        self.disconnected: bool = False
+        # REQ-8.2: counts reconnect-driven initialize() calls only (not cold starts).
+        self.reconnect_count: int = 0
+        # REQ-8.3: when True, initialize() returns False (terminal still down).
+        self.fail_on_reconnect: bool = False
+        # Track whether disconnected was True at the start of the last initialize()
+        # call so reconnect_count only increments on actual reconnect attempts.
+        self._was_disconnected_on_init: bool = False
         # Real MT5 order_check() returns retcode 0 / comment "Done" on success.
         self.order_check_result = FakeMT5TradeResult(
             retcode=0,
@@ -238,10 +248,21 @@ class FakeMT5Backend:
             )
         ]
 
-    def symbols_get(self) -> list[FakeMT5Symbol]:
+    def symbols_get(self) -> list[FakeMT5Symbol] | None:
+        if self.disconnected:
+            self._last_error = (-10004, "No IPC connection")
+            return None
         return list(self.symbols)
 
     def initialize(self) -> bool:
+        # REQ-8.2 / REQ-8.3: only count and clear disconnected on a reconnect attempt.
+        was_disconnected = self.disconnected
+        if was_disconnected:
+            if self.fail_on_reconnect:
+                # Terminal still down — do not clear disconnected, do not count.
+                return False
+            self.disconnected = False
+            self.reconnect_count += 1
         self.initialized = True
         return True
 
@@ -256,26 +277,41 @@ class FakeMT5Backend:
         return False
 
     def symbol_info_tick(self, symbol: str) -> FakeMT5Tick | None:
+        if self.disconnected:
+            self._last_error = (-10004, "No IPC connection")
+            return None
         return self.ticks.get(symbol)
 
     def copy_rates_from_pos(
         self, symbol: str, timeframe: int, start_pos: int, count: int
     ) -> list[dict[str, float | int]] | None:
+        if self.disconnected:
+            self._last_error = (-10004, "No IPC connection")
+            return None
         del start_pos
         rates = self.rates.get((symbol, timeframe))
         if rates is None:
             return None
         return rates[:count]
 
-    def account_info(self) -> FakeMT5Account:
+    def account_info(self) -> FakeMT5Account | None:
+        if self.disconnected:
+            self._last_error = (-10004, "No IPC connection")
+            return None
         return self.account
 
-    def positions_get(self, *, symbol: str | None = None) -> list[FakeMT5Position]:
+    def positions_get(self, *, symbol: str | None = None) -> list[FakeMT5Position] | None:
+        if self.disconnected:
+            self._last_error = (-10004, "No IPC connection")
+            return None
         if symbol is None:
             return list(self.positions)
         return [item for item in self.positions if item.symbol == symbol]
 
-    def orders_get(self, *, symbol: str | None = None) -> list[FakeMT5Order]:
+    def orders_get(self, *, symbol: str | None = None) -> list[FakeMT5Order] | None:
+        if self.disconnected:
+            self._last_error = (-10004, "No IPC connection")
+            return None
         if symbol is None:
             return list(self.orders)
         return [item for item in self.orders if item.symbol == symbol]
@@ -313,7 +349,10 @@ class FakeMT5Backend:
             price=price,
         )
 
-    def order_send(self, request: Mapping[str, object]) -> FakeMT5TradeResult:
+    def order_send(self, request: Mapping[str, object]) -> FakeMT5TradeResult | None:
+        if self.disconnected:
+            self._last_error = (-10004, "No IPC connection")
+            return None
         self.order_requests.append(dict(request))
         action = int(cast(int | float | str, request["action"]))
         volume = float(

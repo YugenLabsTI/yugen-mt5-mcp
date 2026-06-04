@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "yugen-mt5-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "Secure, auditable MCP server foundation for MetaTrader 5"
 readme = "README.md"
 requires-python = ">=3.11"

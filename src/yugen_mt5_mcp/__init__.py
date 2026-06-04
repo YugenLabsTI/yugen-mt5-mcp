@@ -2,8 +2,10 @@
 
 from .app import (
     AUDIT_PATH_ENV,
+    Diagnostics,
     EntrypointWarning,
     RuntimeApp,
+    build_diagnostics,
     build_runtime,
     emit_warnings,
     parse_allowed_symbols,
@@ -53,8 +55,10 @@ __all__ = [
     "AuditEvent",
     "AuditStore",
     "AUDIT_PATH_ENV",
+    "build_diagnostics",
     "build_runtime",
     "build_auth_tag",
+    "Diagnostics",
     "ChartBridgeAck",
     "ChartBridgeAction",
     "ChartBridgeClient",

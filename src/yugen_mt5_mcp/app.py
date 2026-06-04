@@ -378,6 +378,7 @@ def build_runtime(
         server = _create_default_server(
             market_data,
             doctor_service,
+            adapter=adapter,
             trading_service=trading_service,
             bulk_service=bulk_service,
             session_store=session_store,
@@ -453,6 +454,7 @@ def _create_default_server(
     market_data: MarketDataService,
     doctor_service: DoctorService,
     *,
+    adapter: MT5Adapter | None = None,
     trading_service: TradingService | None = None,
     bulk_service: BulkTradeService | None = None,
     session_store: SessionRiskStore | None = None,
@@ -462,6 +464,7 @@ def _create_default_server(
     return create_server(
         market_data,
         doctor_service=doctor_service,
+        adapter=adapter,
         trading_service=trading_service,
         bulk_service=bulk_service,
         session_store=session_store,

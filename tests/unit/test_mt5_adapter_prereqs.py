@@ -126,7 +126,7 @@ class TestConnectionStateDataclass:
         state = ConnectionState(
             connected=True,
             last_error_code=0,
-            last_error_detail="OK",
+            last_error_message="OK",
             reconnect_attempts=0,
             last_reconnect_at=None,
         )
@@ -140,13 +140,13 @@ class TestConnectionStateDataclass:
         state = ConnectionState(
             connected=True,
             last_error_code=0,
-            last_error_detail="OK",
+            last_error_message="OK",
             reconnect_attempts=3,
             last_reconnect_at=now,
         )
         assert state.connected is True
         assert state.last_error_code == 0
-        assert state.last_error_detail == "OK"
+        assert state.last_error_message == "OK"
         assert state.reconnect_attempts == 3
         assert state.last_reconnect_at == now
 
@@ -154,7 +154,7 @@ class TestConnectionStateDataclass:
         state = ConnectionState(
             connected=False,
             last_error_code=-10004,
-            last_error_detail="No IPC connection",
+            last_error_message="No IPC connection",
             reconnect_attempts=0,
             last_reconnect_at=None,
         )

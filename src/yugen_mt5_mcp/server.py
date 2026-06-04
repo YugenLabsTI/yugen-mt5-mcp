@@ -481,6 +481,28 @@ def register_doctor_tools(mcp: FastMCP, doctor_service: DoctorService) -> None:
         return to_payload(doctor_service.run())
 
 
+def register_reconnect_tool(mcp: FastMCP, adapter: MT5Adapter) -> None:
+    """Register the reconnect_mt5 MCP tool (REQ-4.1–4.6, T-09)."""
+
+    @mcp.tool
+    def reconnect_mt5() -> object:
+        """Re-establish the MT5 IPC connection.
+
+        Returns structured success/failure data — never raises to the transport.
+        This is a control-plane operation only; it NEVER places orders or
+        modifies positions (REQ-4.4).
+        """
+        state = adapter.force_reconnect()
+        return to_payload(
+            {
+                "success": state.connected,
+                "connection_state": state,
+                "reconnect_attempts": state.reconnect_attempts,
+                "error": None if state.connected else state.last_error_message,
+            }
+        )
+
+
 def register_trading_action_tools(
     mcp: FastMCP,
     *,
@@ -826,8 +848,7 @@ def create_server(
     # bridge is disabled; each tool returns a typed service_unavailable error on
     # invocation without contacting the bridge. The tool surface is always visible.
     register_chart_tools(mcp, chart_client)
-    # REQ-4.1 / REQ-4.2: reconnect_mt5 tool stub — no-op until slice 2 (T-09).
-    # The adapter is stored here so T-09 can wire the tool without restructuring.
-    # register_reconnect_tool(mcp, adapter) will be called here in slice 2.
-    del adapter  # suppress unused-arg until T-09 is implemented
+    # REQ-4.1: reconnect_mt5 tool (T-09).
+    if adapter is not None:
+        register_reconnect_tool(mcp, adapter)
     return mcp

@@ -106,6 +106,7 @@ def test_create_default_doctor_reports_healthy_passive_runtime(tmp_path: Path) -
     assert [check.name for check in report.checks] == [
         "config",
         "audit_path",
+        "mt5_connection",
         "mt5_account",
         "read_tools",
         "runtime_context",

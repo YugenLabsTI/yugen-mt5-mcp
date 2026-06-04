@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -17,6 +19,16 @@ from typing import Any, Protocol, TypeVar, cast
 # Other candidates (-10003 "no connection", -10005 "timeout") need live-terminal
 # confirmation before being added here.  Unknown codes intentionally fail loud.
 STALE_IPC_ERROR_CODES: frozenset[int] = frozenset({-10004})
+
+# ---------------------------------------------------------------------------
+# Backoff constants (REQ-2.4, REQ-2.5)
+# ---------------------------------------------------------------------------
+# Max reconnect attempts per _reconnect_with_backoff() call.
+_RECONNECT_MAX_ATTEMPTS: int = 3
+# Base sleep between attempts in seconds.  Actual delay = base * 2**attempt + jitter.
+_RECONNECT_BASE_DELAY: float = 0.5
+# Hard ceiling on computed delay (seconds).
+_RECONNECT_MAX_DELAY: float = 4.0
 
 TResult = TypeVar("TResult")
 
@@ -167,7 +179,7 @@ class ConnectionState:
 
     connected: bool
     last_error_code: int
-    last_error_detail: str
+    last_error_message: str
     reconnect_attempts: int
     last_reconnect_at: datetime | None
 
@@ -489,10 +501,12 @@ class MT5Adapter:
         )
 
     def send_trade(self, request: Mapping[str, object]) -> TradeResult:
+        # REQ-3.1 / REQ-3.4: NEVER retry on the write path.
         row = self._call_single(
             "order_send",
             lambda: self._backend.order_send(request),
             empty_message="trade send failed",
+            retry_on_reconnect=False,
         )
         return TradeResult(
             retcode=int(_get_attr(row, "retcode")),
@@ -525,7 +539,7 @@ class MT5Adapter:
         return ConnectionState(
             connected=connected,
             last_error_code=code,
-            last_error_detail=detail,
+            last_error_message=detail,
             reconnect_attempts=self._reconnect_attempts,
             last_reconnect_at=self._last_reconnect_at,
         )
@@ -578,15 +592,149 @@ class MT5Adapter:
             return
         raise self._backend_error(f"symbol selection failed for: {symbol}")
 
+    # ------------------------------------------------------------------
+    # Reconnect primitive (T-04 / REQ-1.1–1.5)
+    # ------------------------------------------------------------------
+
+    def _reconnect(self, *, trigger: str) -> ConnectionState:
+        """Shutdown then re-initialize the backend under self._lock.
+
+        REQ-1.2: MUST be called while holding self._lock.
+        REQ-1.4: logs attempt to stderr before each call.
+        REQ-1.5: raises MT5AdapterError if initialize() returns falsy.
+        """
+        code, detail = self._backend.last_error()
+        attempt_num = self._reconnect_attempts + 1
+        print(
+            f"[mt5-reconnect] trigger={trigger} attempt={attempt_num}/{_RECONNECT_MAX_ATTEMPTS}"
+            f" last_error={code}:{detail}"
+            f" ts={datetime.now(UTC).isoformat()}",
+            file=sys.stderr,
+        )
+        self._backend.shutdown()
+        ok = self._backend.initialize()
+        if not ok:
+            self._reconnect_attempts += 1
+            self._last_reconnect_at = datetime.now(UTC)
+            print(
+                f"[mt5-reconnect] FAILED trigger={trigger} attempt={attempt_num}"
+                f" last_error={code}:{detail}",
+                file=sys.stderr,
+            )
+            raise MT5AdapterError(
+                f"reconnect failed: initialize() returned falsy "
+                f"(last_error={code}: {detail})"
+            )
+        self._reconnect_attempts += 1
+        self._last_reconnect_at = datetime.now(UTC)
+        print(
+            f"[mt5-reconnect] reconnected trigger={trigger} attempts={self._reconnect_attempts}"
+            f" ts={self._last_reconnect_at.isoformat()}",
+            file=sys.stderr,
+        )
+        err_code, err_detail = self._backend.last_error()
+        return ConnectionState(
+            connected=True,
+            last_error_code=err_code,
+            last_error_message=err_detail,
+            reconnect_attempts=self._reconnect_attempts,
+            last_reconnect_at=self._last_reconnect_at,
+        )
+
+    # ------------------------------------------------------------------
+    # Backoff loop (T-05 / REQ-2.4, REQ-2.5)
+    # ------------------------------------------------------------------
+
+    def _reconnect_with_backoff(self, operation: str, *, trigger: str) -> ConnectionState:
+        """Bounded exponential backoff reconnect loop.
+
+        CRITICAL: sleeps happen OUTSIDE self._lock so other tool calls are not
+        blocked for the full backoff window.  Each _reconnect() call re-acquires
+        the lock individually (lock is non-reentrant — must not be held here).
+        """
+        import time  # noqa: PLC0415  — lazy import to avoid cost on the happy path
+
+        last_error: MT5AdapterError | None = None
+        for attempt in range(_RECONNECT_MAX_ATTEMPTS):
+            if attempt > 0:
+                delay = min(_RECONNECT_BASE_DELAY * (2 ** attempt), _RECONNECT_MAX_DELAY)
+                delay += random.uniform(0, _RECONNECT_BASE_DELAY)
+                time.sleep(delay)
+            try:
+                with self._lock:
+                    state = self._reconnect(trigger=trigger)
+                # Verify liveness after lock is released
+                probe = self._backend.account_info()
+                if probe is not None:
+                    return state
+                # initialize() returned True but backend still not responsive
+                # (edge case with some MT5 builds); treat as failure and retry
+                last_error = MT5AdapterError(
+                    f"reconnect reported success but backend unresponsive (op={operation})"
+                )
+            except MT5AdapterError as exc:
+                last_error = exc
+                continue
+        code, detail = self._backend.last_error()
+        print(
+            f"[mt5-reconnect] FAILED trigger={trigger} after {_RECONNECT_MAX_ATTEMPTS} attempts"
+            f" last_error={code}:{detail}",
+            file=sys.stderr,
+        )
+        raise MT5AdapterError(
+            f"MT5 terminal unreachable after {_RECONNECT_MAX_ATTEMPTS} reconnect attempts"
+            f" (op={operation}, last_error={code}: {detail})"
+        ) from last_error
+
+    # ------------------------------------------------------------------
+    # Public force-reconnect (T-09 / REQ-4.1–4.6)
+    # ------------------------------------------------------------------
+
+    def force_reconnect(self) -> ConnectionState:
+        """Explicit reconnect trigger (MCP tool path).
+
+        Returns failure-as-data (ConnectionState with connected=False) instead
+        of raising so the tool caller always gets structured feedback.
+        REQ-4.5: MUST NOT propagate unhandled exceptions to MCP transport.
+        """
+        print(
+            f"[mt5-reconnect] trigger=explicit ts={datetime.now(UTC).isoformat()}",
+            file=sys.stderr,
+        )
+        try:
+            return self._reconnect_with_backoff("force_reconnect", trigger="explicit")
+        except MT5AdapterError:
+            code, detail = self._backend.last_error()
+            return ConnectionState(
+                connected=False,
+                last_error_code=code,
+                last_error_message=detail,
+                reconnect_attempts=self._reconnect_attempts,
+                last_reconnect_at=self._last_reconnect_at,
+            )
+
     def _call(
         self,
         operation: str,
         callback: Callable[[], Sequence[object] | None],
+        *,
+        retry_on_reconnect: bool = True,
     ) -> list[object]:
         with self._lock:
             result = callback()
+        reconnected = False
         if result is None:
-            raise self._backend_error(f"MT5 returned no result for {operation}")
+            if retry_on_reconnect and self._is_stale_ipc():
+                # Lock is released — safe to call _reconnect_with_backoff (non-reentrant lock)
+                self._reconnect_with_backoff(operation, trigger="lazy")
+                reconnected = True
+                with self._lock:
+                    result = callback()
+            if result is None:
+                msg = f"MT5 returned no result for {operation}"
+                if reconnected:
+                    msg = f"after reconnect: {msg}"
+                raise self._backend_error(msg)
         return list(result)
 
     def _call_rows(
@@ -595,8 +743,11 @@ class MT5Adapter:
         callback: Callable[[], Sequence[object] | None],
         *,
         empty_message: str,
+        retry_on_reconnect: bool = True,
     ) -> list[object]:
-        rows = self._call_single(operation, callback, empty_message=empty_message)
+        rows = self._call_single(
+            operation, callback, empty_message=empty_message, retry_on_reconnect=retry_on_reconnect
+        )
         return list(rows)
 
     def _call_single(
@@ -605,18 +756,39 @@ class MT5Adapter:
         callback: Callable[[], TResult | None],
         *,
         empty_message: str,
+        retry_on_reconnect: bool = True,
     ) -> TResult:
         with self._lock:
             result = callback()
+        reconnected = False
         if result is None:
-            raise self._backend_error(empty_message, operation=operation)
+            if retry_on_reconnect and self._is_stale_ipc():
+                # Lock released — safe to call _reconnect_with_backoff
+                self._reconnect_with_backoff(operation, trigger="lazy")
+                reconnected = True
+                with self._lock:
+                    result = callback()
+            if result is None:
+                msg = f"after reconnect: {empty_message}" if reconnected else empty_message
+                raise self._backend_error(msg, operation=operation)
         return result
 
-    def _call_boolean(self, operation: str, callback: Callable[[], bool]) -> bool:
+    def _call_boolean(
+        self,
+        operation: str,
+        callback: Callable[[], bool],
+        *,
+        retry_on_reconnect: bool = True,
+    ) -> bool:
         with self._lock:
             result = callback()
         if result is False:
-            return False
+            if retry_on_reconnect and self._is_stale_ipc():
+                self._reconnect_with_backoff(operation, trigger="lazy")
+                with self._lock:
+                    result = callback()
+            if result is False:
+                return False
         if result is True:
             return True
         raise self._backend_error(f"MT5 returned non-boolean result for {operation}")

@@ -598,6 +598,18 @@ def emit_warnings(
 
 
 def main() -> None:
+    """Legacy entrypoint shim — preserved for one transition release.
+
+    .. deprecated::
+        Call ``yugen_mt5_mcp.cli.main()`` directly or use the
+        ``yugen-mt5-mcp`` console script instead.  This shim will be removed
+        in a future release.
+    """
+    print(
+        "Warning: calling app.main() directly is deprecated. "
+        "Use cli.main() instead.",
+        file=sys.stderr,
+    )
     runtime = build_runtime()
     emit_warnings(runtime.warnings)
     if runtime.config.transport.mode is TransportMode.REMOTE:

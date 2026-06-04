@@ -314,6 +314,7 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
     assert [check["name"] for check in checks] == [
         "config",
         "audit_path",
+        "mt5_connection",
         "mt5_account",
         "read_tools",
         "runtime_context",

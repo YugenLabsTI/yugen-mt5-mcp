@@ -1,177 +1,221 @@
+<!-- mcp-name: io.github.yugenlabsti/yugen-mt5-mcp -->
+
 # yugen-mt5-mcp
 
-Secure MCP server foundations for MetaTrader 5 with audited trading controls, loopback chart bridging, and a hardened remote path for VPS use.
+Secure, auditable MCP server for MetaTrader 5 — gives AI clients controlled access to market data, account state, and trade execution through a hardened gate with symbol allowlists, volume limits, and an append-only audit trail.
 
-## Quick path
+## Quick Start (for users)
 
-1. Start in local `stdio` mode by default.
-2. Enable remote mode with a bearer token; use a loopback/private bind (trusted-local, TLS optional)
-   or a public bind behind a TLS terminator (Caddy, nginx, cloud LB — provider-agnostic).
-   See [docs/remote-transport.md](docs/remote-transport.md) for the full deployment guide.
-3. Treat real-account trading as session-scoped risk acceptance that resets on restart.
+### Prerequisites
 
-## Transport modes
+- Windows with MetaTrader 5 installed and logged into a demo account
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) installed
 
-MCP transport defines how an MCP client talks to this server. It does not change
-the tools themselves; it changes the communication channel.
+### Run without installing
 
-| Mode | Default | Requirements | Notes |
-|------|---------|--------------|-------|
-| `stdio` | Yes | Client starts the local process | No TCP listener is opened; the client exchanges JSON over the process stdin/stdout pipes. |
-| `remote` | No | `YUGEN_MT5_REMOTE_ENABLED=true`, bearer token, allowlist | HTTP listener on `host:port`. For loopback/private binds TLS is optional (trusted-local tier); for public binds TLS termination is required. See [docs/remote-transport.md](docs/remote-transport.md). |
+```powershell
+uvx yugen-mt5-mcp
+```
 
-Use `stdio` when the MCP client and MT5 terminal are on the same Windows host.
-Use `remote` only when another machine or environment, such as WSL or a VPS
-client, must reach the Windows-hosted server over a network boundary.
+### Install persistently
 
-## Run on Windows with stdio
+```powershell
+uv tool install yugen-mt5-mcp
+yugen-mt5-mcp
+```
 
-1. Open MetaTrader 5 and log into a demo account.
-2. Install the package in editable mode:
+### Validate your setup
 
-   ```powershell
-   python -m pip install -e ".[dev]"
-   ```
+```powershell
+yugen-mt5-mcp doctor
+```
 
-3. Choose the symbol allowlist for reads and trading:
+This runs all readiness checks (config, MT5 connection, audit path, transport) without starting the server.
 
-   ```powershell
-   $env:YUGEN_MT5_ALLOWED_SYMBOLS="EURUSD,XAUUSD"
-   ```
+---
 
-   `*` allows every symbol for reads and trading:
+## Client Configuration
 
-   ```powershell
-   $env:YUGEN_MT5_ALLOWED_SYMBOLS="*"
-   ```
+### Claude Desktop
 
-   Wildcard mode prints a warning at startup. It does not relax live-trading,
-   real-account, volume, or exposure gates.
+Add the following to your Claude Desktop config file.
 
-4. To place demo orders, explicitly enable live trading and allow the trading
-   symbol. Use `true` / `false` values:
-
-   ```powershell
-   $env:YUGEN_MT5_ALLOWED_SYMBOLS="Boom 1000 Index"
-   $env:YUGEN_MT5_ALLOW_LIVE_TRADING="true"
-   $env:YUGEN_MT5_ALLOW_REAL_ACCOUNTS="false"
-   ```
-
-   `YUGEN_MT5_ALLOW_REAL_ACCOUNTS="true"` is only for real accounts. Demo
-   accounts do not need it.
-
-5. (Optional) Tune the risk limits. Both default to `1.0` when unset:
-
-   ```powershell
-   $env:YUGEN_MT5_MAX_ORDER_VOLUME="2.0"       # max volume of a single order
-   $env:YUGEN_MT5_MAX_SYMBOL_EXPOSURE="5.0"    # max cumulative volume per symbol
-   ```
-
-   `max_order_volume` caps one order; `max_symbol_exposure` caps the total
-   open volume across all positions in the same symbol. Set either to
-   `unlimited` (or a negative number) to disable that gate — this prints a
-   warning at startup so the relaxed limit stays visible. An unparsable value
-   stops startup with a clear error instead of silently defaulting.
-
-6. Start the stdio MCP server:
-
-   ```powershell
-   python -m yugen_mt5_mcp
-   ```
-
-   If installed as a script, this is equivalent:
-
-   ```powershell
-   yugen-mt5-mcp
-   ```
-
-The server connects to the already-open local MT5 terminal through the official
-MetaTrader5 Python IPC session. It does not need the account password because
-the terminal is already authenticated.
-
-### Claude Desktop example
-
-Claude Desktop should launch the server with a writable audit path. Prefer an
-absolute path so the server does not depend on Claude's process working
-directory:
+- **Windows**: `C:\Users\YOUR_USERNAME\AppData\Roaming\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "yugen-mt5": {
-      "command": "C:\\Users\\sgg10\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
-      "args": ["-m", "yugen_mt5_mcp"],
-      "cwd": "C:\\Users\\sgg10\\Documents\\yugen-mt5-mcp",
+      "command": "uvx",
+      "args": ["yugen-mt5-mcp"],
       "env": {
-        "YUGEN_MT5_ALLOWED_SYMBOLS": "Boom 1000 Index",
-        "YUGEN_MT5_ALLOW_LIVE_TRADING": "true",
+        "YUGEN_MT5_ALLOWED_SYMBOLS": "EURUSD,XAUUSD",
+        "YUGEN_MT5_ALLOW_LIVE_TRADING": "false",
         "YUGEN_MT5_ALLOW_REAL_ACCOUNTS": "false",
-        "YUGEN_MT5_MAX_ORDER_VOLUME": "2.0",
-        "YUGEN_MT5_MAX_SYMBOL_EXPOSURE": "5.0",
-        "YUGEN_MT5_AUDIT_PATH": "C:\\Users\\sgg10\\AppData\\Local\\Yugen\\mt5-mcp\\audit.sqlite3"
+        "YUGEN_MT5_MAX_ORDER_VOLUME": "1.0",
+        "YUGEN_MT5_MAX_SYMBOL_EXPOSURE": "1.0",
+        "YUGEN_MT5_AUDIT_PATH": "C:\\Users\\YOUR_USERNAME\\AppData\\Local\\Yugen\\mt5-mcp\\audit.sqlite3"
       }
     }
   }
 }
 ```
 
-`YUGEN_MT5_AUDIT_PATH` defaults to `var/audit.sqlite3`. Set it explicitly for
-desktop clients so audit storage lands in a user-writable directory.
+You can also generate this block automatically:
 
-Remote startup is rejected if it tries to skip bearer auth or, on a public bind,
-skip both TLS termination and the `ALLOW_INSECURE` opt-out. See
-[docs/remote-transport.md](docs/remote-transport.md) for the full security model,
-deployment topologies, and WSL guidance.
+```powershell
+yugen-mt5-mcp config claude
+```
 
-## Trading safety model
+### Cursor
+
+Add the following to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "yugen-mt5": {
+      "command": "uvx",
+      "args": ["yugen-mt5-mcp"],
+      "env": {
+        "YUGEN_MT5_ALLOWED_SYMBOLS": "EURUSD,XAUUSD",
+        "YUGEN_MT5_ALLOW_LIVE_TRADING": "false",
+        "YUGEN_MT5_ALLOW_REAL_ACCOUNTS": "false",
+        "YUGEN_MT5_MAX_ORDER_VOLUME": "1.0",
+        "YUGEN_MT5_MAX_SYMBOL_EXPOSURE": "1.0"
+      }
+    }
+  }
+}
+```
+
+```powershell
+yugen-mt5-mcp config cursor
+```
+
+### OpenCode
+
+Add the following to `~/.config/opencode/config.json`:
+
+```json
+{
+  "mcp": {
+    "yugen-mt5": {
+      "type": "local",
+      "command": ["uvx", "yugen-mt5-mcp"],
+      "environment": {
+        "YUGEN_MT5_ALLOWED_SYMBOLS": "EURUSD,XAUUSD",
+        "YUGEN_MT5_ALLOW_LIVE_TRADING": "false",
+        "YUGEN_MT5_ALLOW_REAL_ACCOUNTS": "false",
+        "YUGEN_MT5_MAX_ORDER_VOLUME": "1.0",
+        "YUGEN_MT5_MAX_SYMBOL_EXPOSURE": "1.0"
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+```powershell
+yugen-mt5-mcp config opencode
+```
+
+---
+
+## Configuration (Environment Variables)
+
+All configuration is via `YUGEN_MT5_*` environment variables. You can generate an env block interactively:
+
+```powershell
+yugen-mt5-mcp init
+```
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `YUGEN_MT5_ALLOWED_SYMBOLS` | **Yes** | — | Comma-separated symbol allowlist, or `*` for all. Wildcard prints a startup warning but does not relax any trading gate. |
+| `YUGEN_MT5_ALLOW_LIVE_TRADING` | No | `false` | Set `true` to enable order execution. When `false` the server is read-only. |
+| `YUGEN_MT5_ALLOW_REAL_ACCOUNTS` | No | `false` | Set `true` to permit real (non-demo) account operations. Demo accounts do not need this. |
+| `YUGEN_MT5_MAX_ORDER_VOLUME` | No | `1.0` | Max lot volume per single exposure-creating order. Does not apply to closing or modifying. Set `unlimited` to disable (startup warning). |
+| `YUGEN_MT5_MAX_SYMBOL_EXPOSURE` | No | `1.0` | Max cumulative open volume per symbol. Checked only on open. Set `unlimited` to disable (startup warning). |
+| `YUGEN_MT5_AUDIT_PATH` | No | `var/audit.sqlite3` | Path to the SQLite audit database. Use an absolute path with desktop clients. |
+| `YUGEN_MT5_REAL_ACCOUNT_CONSENT` | No | — | Explicit consent token for real-account operations. Resets on every restart. |
+| `YUGEN_MT5_REMOTE_ENABLED` | No | `false` | Set `true` to start the HTTP remote transport. Requires `[remote]` extra. |
+| `YUGEN_MT5_REMOTE_HOST` | No | `127.0.0.1` | Bind host for remote transport. Use `0.0.0.0` for LAN/VPS (requires TLS termination). |
+| `YUGEN_MT5_REMOTE_PORT` | No | `8765` | Port for remote transport. |
+| `YUGEN_MT5_REMOTE_BEARER_TOKEN` | No | — | Bearer token for remote transport auth. Required when `YUGEN_MT5_REMOTE_ENABLED=true`. |
+
+### Trading safety model
 
 | Control | Behavior |
 |---------|----------|
-| Real-account acknowledgement | Required only for the current server/agent session. |
-| Restart semantics | Any server or agent restart clears the acknowledgement. |
+| Real-account acknowledgement | Session-scoped. Clears on every server restart. |
 | Allowed symbols / account modes | Enforced before MT5 calls. |
-| Volume / exposure limits | Enforced on entries only (opening / pending). Closing and modifying are never capped. Configurable via `YUGEN_MT5_MAX_ORDER_VOLUME` / `YUGEN_MT5_MAX_SYMBOL_EXPOSURE` (default `1.0`; `unlimited` disables with a startup warning). |
-| Audit trail | SQLite append-only events with token/secret redaction. |
+| Volume / exposure limits | Applied to opening orders only. Closing and modifying are never capped. |
+| Audit trail | SQLite append-only log with token and secret redaction. |
 
-### Volume limits
+---
 
-Two MCP gates bound how much volume a trade can carry:
+## Remote Transport (WSL / Mac to Windows MT5)
 
-1. **`max_order_volume`** (configurable, `YUGEN_MT5_MAX_ORDER_VOLUME`) — the
-   largest volume the MCP submits in a single **exposure-creating** order. It
-   applies only to `open_position` and `place_pending_order`. It deliberately
-   does **not** apply to closing, modifying SL/TP, or cancelling: you can always
-   reduce risk or adjust protection regardless of position size.
-2. **`max_symbol_exposure`** (configurable, `YUGEN_MT5_MAX_SYMBOL_EXPOSURE`) —
-   the largest cumulative open volume the MCP allows across all positions in one
-   symbol. Checked only when opening.
+When your AI client runs in WSL, macOS, or a VPS and MetaTrader 5 is on a Windows host, use the HTTP remote transport:
 
-Because `max_order_volume` caps new entries, opening more than the configured
-value requires splitting the entry into chunks — and the caller does this; the
-MCP never auto-splits any order. (For example, with the cap at 5 lots, a 6-lot
-entry must be sent as 5 + 1.) Closing is not capped at all: a full close of any
-size goes through in one order.
+```powershell
+# On the Windows host:
+$env:YUGEN_MT5_REMOTE_ENABLED="true"
+$env:YUGEN_MT5_REMOTE_BEARER_TOKEN="your-secret-token"
+yugen-mt5-mcp run --transport remote
 
-> Brokers may also enforce their own per-order `volume_max`, independent of
-> these gates. The MCP does not model or auto-split around it; it submits what
-> you request and surfaces any broker rejection.
+# Generate a client config block pointing at the Windows host:
+yugen-mt5-mcp config remote --host 192.168.1.100 --port 8765 --token your-secret-token
+```
 
-## Demo smoke controls
+Install the remote extra first:
 
-Live smoke coverage is opt-in and demo-only.
+```powershell
+uv tool install "yugen-mt5-mcp[remote]"
+```
 
-Required environment variables:
+See [docs/remote-transport.md](docs/remote-transport.md) for the full deployment guide, security model, and TLS setup.
 
-- `YUGEN_MT5_ENABLE_DEMO_SMOKE=1`
-- `YUGEN_MT5_DEMO_SMOKE_ACK=demo-only`
+---
 
-Optional environment variables:
+## For Contributors
 
-- `YUGEN_MT5_DEMO_SMOKE_SYMBOLS=EURUSD,XAUUSD`
-- `YUGEN_MT5_DEMO_SMOKE_MAX_VOLUME=0.01`
+### Clone and install in editable mode
 
-Guardrails:
+```powershell
+git clone https://github.com/YugenLabsTI/yugen-mt5-mcp.git
+cd yugen-mt5-mcp
+python -m pip install -e ".[dev]"
+```
 
-- real accounts are rejected,
-- symbols must be explicitly allowed,
-- smoke volume must stay `> 0` and `<= 0.01` lots.
+### Run the test suite
+
+```powershell
+pytest
+```
+
+MT5-dependent tests are automatically skipped on non-Windows platforms.
+
+### Run linting and type checks
+
+```powershell
+ruff check src tests
+mypy
+```
+
+### Start the server locally
+
+```powershell
+$env:YUGEN_MT5_ALLOWED_SYMBOLS="EURUSD,XAUUSD"
+yugen-mt5-mcp run
+```
+
+For all CLI options see [docs/cli.md](docs/cli.md). For installation variants see [docs/install.md](docs/install.md).
+
+---
+
+## License
+
+MIT — see [LICENSE.md](LICENSE.md).

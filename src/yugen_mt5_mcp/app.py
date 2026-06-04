@@ -502,14 +502,14 @@ class _NoOpMT5Backend:
     def symbols_get(self) -> None:
         return None
 
-    def symbol_select(self, symbol: str, enable: bool) -> bool:
+    def symbol_select(self, _symbol: str, _enable: bool) -> bool:
         return False
 
-    def symbol_info_tick(self, symbol: str) -> None:
+    def symbol_info_tick(self, _symbol: str) -> None:
         return None
 
     def copy_rates_from_pos(
-        self, symbol: str, timeframe: int, start_pos: int, count: int
+        self, _symbol: str, _timeframe: int, _start_pos: int, _count: int
     ) -> None:
         return None
 
@@ -523,19 +523,19 @@ class _NoOpMT5Backend:
         return None
 
     def history_deals_get(
-        self, date_from: object, date_to: object, *, group: str | None = None
+        self, _date_from: object, _date_to: object, *, group: str | None = None
     ) -> None:
         return None
 
     def history_orders_get(
-        self, date_from: object, date_to: object, *, group: str | None = None
+        self, _date_from: object, _date_to: object, *, group: str | None = None
     ) -> None:
         return None
 
-    def order_check(self, request: object) -> None:
+    def order_check(self, _request: object) -> None:
         return None
 
-    def order_send(self, request: object) -> None:
+    def order_send(self, _request: object) -> None:
         return None
 
     def last_error(self) -> tuple[int, str]:

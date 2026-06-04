@@ -9,6 +9,7 @@ audit directories, SQLite files, or audit rows while producing diagnostics.
 from __future__ import annotations
 
 import ipaddress
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -37,6 +38,7 @@ class DoctorStatus(StrEnum):
     OK = "ok"
     WARN = "warn"
     FAIL = "fail"
+    SKIPPED = "skipped"
 
 
 class DoctorSeverity(StrEnum):
@@ -115,10 +117,71 @@ def create_default_doctor(
     config: AppConfig,
     audit_store: AuditStore,
     adapter: MT5Adapter,
-    read_tool_names: Sequence[str],
+    read_tool_names: Sequence[str] | None,
     entrypoint_warnings: Sequence[RuntimeWarningLike] = (),
+    include_platform: bool = False,
+    skip_mt5: bool = False,
 ) -> DoctorService:
-    checks = cast(
+    """Build the default DoctorService with the configured check set.
+
+    Parameters
+    ----------
+    read_tool_names:
+        Sequence of registered MCP tool names for the read_tools check.
+        Pass ``None`` to omit the check entirely (CLI doctor path has no server).
+    include_platform:
+        When True, insert ``_check_platform`` as the very first check.
+    skip_mt5:
+        When True, replace the mt5_connection and mt5_account checks with
+        SKIPPED stubs.  Used by ``build_diagnostics()`` on non-Windows so that
+        MT5-specific checks are transparently skipped without importing MetaTrader5.
+    """
+    # MT5-specific checks: active or SKIPPED stubs depending on skip_mt5.
+    if skip_mt5:
+        mt5_checks: tuple[DoctorCheck, ...] = (
+            _CallableDoctorCheck(
+                "mt5_connection",
+                lambda: DoctorCheckResult(
+                    name="mt5_connection",
+                    status=DoctorStatus.SKIPPED,
+                    severity=DoctorSeverity.INFO,
+                    summary="Non-Windows platform: MT5 connection check skipped.",
+                ),
+            ),
+            _CallableDoctorCheck(
+                "mt5_account",
+                lambda: DoctorCheckResult(
+                    name="mt5_account",
+                    status=DoctorStatus.SKIPPED,
+                    severity=DoctorSeverity.INFO,
+                    summary="Non-Windows platform: MT5 account check skipped.",
+                ),
+            ),
+        )
+    else:
+        mt5_checks = cast(
+            tuple[DoctorCheck, ...],
+            (
+                # REQ-5.6: mt5_connection BEFORE mt5_account — IPC liveness first.
+                _CallableDoctorCheck(
+                    "mt5_connection", lambda: _check_mt5_connection(adapter)
+                ),
+                _CallableDoctorCheck("mt5_account", lambda: _check_mt5_account(adapter)),
+            ),
+        )
+
+    # read_tools check: omitted when None (CLI doctor path has no server).
+    read_tools_checks: tuple[DoctorCheck, ...] = (
+        (
+            _CallableDoctorCheck(
+                "read_tools", lambda: _check_read_tools(read_tool_names)
+            ),
+        )
+        if read_tool_names is not None
+        else ()
+    )
+
+    core_checks: tuple[DoctorCheck, ...] = cast(
         tuple[DoctorCheck, ...],
         (
             _CallableDoctorCheck("config", lambda: _check_config(config)),
@@ -126,26 +189,29 @@ def create_default_doctor(
                 "audit_path",
                 lambda: _check_audit_path(audit_store.database_path),
             ),
-            # REQ-5.6: mt5_connection BEFORE mt5_account — IPC liveness first.
-            _CallableDoctorCheck(
-                "mt5_connection", lambda: _check_mt5_connection(adapter)
-            ),
-            _CallableDoctorCheck("mt5_account", lambda: _check_mt5_account(adapter)),
-            _CallableDoctorCheck("read_tools", lambda: _check_read_tools(read_tool_names)),
             _CallableDoctorCheck(
                 "runtime_context",
                 lambda: _check_runtime_context(config, entrypoint_warnings),
             ),
             _CallableDoctorCheck(
-                "real_account_consent",
-                lambda: _check_real_account_consent(config),
-            ),
-            _CallableDoctorCheck(
                 "remote_transport",
                 lambda: _check_remote_transport(config),
             ),
+            *mt5_checks,
+            _CallableDoctorCheck(
+                "real_account_consent",
+                lambda: _check_real_account_consent(config),
+            ),
+            *read_tools_checks,
         ),
     )
+    if include_platform:
+        platform_check: tuple[DoctorCheck, ...] = (
+            _CallableDoctorCheck("platform", _check_platform),
+        )
+        checks = platform_check + core_checks
+    else:
+        checks = core_checks
     return DoctorService(checks=checks)
 
 
@@ -465,8 +531,33 @@ def _check_remote_transport(config: AppConfig) -> DoctorCheckResult:
 
 
 def _overall_status(results: Sequence[DoctorCheckResult]) -> DoctorStatus:
-    if any(result.status is DoctorStatus.FAIL for result in results):
+    # SKIPPED results are ignored — they do not count toward FAIL or WARN.
+    active = [r for r in results if r.status is not DoctorStatus.SKIPPED]
+    if any(r.status is DoctorStatus.FAIL for r in active):
         return DoctorStatus.FAIL
-    if any(result.status is DoctorStatus.WARN for result in results):
+    if any(r.status is DoctorStatus.WARN for r in active):
         return DoctorStatus.WARN
     return DoctorStatus.OK
+
+
+def _check_platform() -> DoctorCheckResult:
+    """Return OK on win32, SKIPPED on every other platform.
+
+    This is always the first check when ``include_platform=True``.  It never
+    returns SKIPPED itself — it either confirms the platform is supported (OK)
+    or signals that all subsequent MT5 checks should be skipped (SKIPPED).
+    """
+    if sys.platform == "win32":
+        return DoctorCheckResult(
+            name="platform",
+            status=DoctorStatus.OK,
+            severity=DoctorSeverity.INFO,
+            summary="Running on Windows — MT5 checks are active.",
+        )
+    return DoctorCheckResult(
+        name="platform",
+        status=DoctorStatus.SKIPPED,
+        severity=DoctorSeverity.INFO,
+        summary="Non-Windows platform: MT5 checks will be skipped.",
+        details={"platform": sys.platform},
+    )

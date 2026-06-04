@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from yugen_mt5_mcp.config_templates import (
     claude_config,
     cursor_config,

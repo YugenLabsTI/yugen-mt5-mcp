@@ -138,23 +138,26 @@ def create_default_doctor(
     """
     # MT5-specific checks: active or SKIPPED stubs depending on skip_mt5.
     if skip_mt5:
-        mt5_checks: tuple[DoctorCheck, ...] = (
-            _CallableDoctorCheck(
-                "mt5_connection",
-                lambda: DoctorCheckResult(
-                    name="mt5_connection",
-                    status=DoctorStatus.SKIPPED,
-                    severity=DoctorSeverity.INFO,
-                    summary="Non-Windows platform: MT5 connection check skipped.",
+        mt5_checks: tuple[DoctorCheck, ...] = cast(
+            tuple[DoctorCheck, ...],
+            (
+                _CallableDoctorCheck(
+                    "mt5_connection",
+                    lambda: DoctorCheckResult(
+                        name="mt5_connection",
+                        status=DoctorStatus.SKIPPED,
+                        severity=DoctorSeverity.INFO,
+                        summary="Non-Windows platform: MT5 connection check skipped.",
+                    ),
                 ),
-            ),
-            _CallableDoctorCheck(
-                "mt5_account",
-                lambda: DoctorCheckResult(
-                    name="mt5_account",
-                    status=DoctorStatus.SKIPPED,
-                    severity=DoctorSeverity.INFO,
-                    summary="Non-Windows platform: MT5 account check skipped.",
+                _CallableDoctorCheck(
+                    "mt5_account",
+                    lambda: DoctorCheckResult(
+                        name="mt5_account",
+                        status=DoctorStatus.SKIPPED,
+                        severity=DoctorSeverity.INFO,
+                        summary="Non-Windows platform: MT5 account check skipped.",
+                    ),
                 ),
             ),
         )
@@ -171,14 +174,17 @@ def create_default_doctor(
         )
 
     # read_tools check: omitted when None (CLI doctor path has no server).
-    read_tools_checks: tuple[DoctorCheck, ...] = (
+    read_tools_checks: tuple[DoctorCheck, ...] = cast(
+        tuple[DoctorCheck, ...],
         (
-            _CallableDoctorCheck(
-                "read_tools", lambda: _check_read_tools(read_tool_names)
-            ),
-        )
-        if read_tool_names is not None
-        else ()
+            (
+                _CallableDoctorCheck(
+                    "read_tools", lambda: _check_read_tools(read_tool_names)
+                ),
+            )
+            if read_tool_names is not None
+            else ()
+        ),
     )
 
     core_checks: tuple[DoctorCheck, ...] = cast(
@@ -206,8 +212,9 @@ def create_default_doctor(
         ),
     )
     if include_platform:
-        platform_check: tuple[DoctorCheck, ...] = (
-            _CallableDoctorCheck("platform", _check_platform),
+        platform_check: tuple[DoctorCheck, ...] = cast(
+            tuple[DoctorCheck, ...],
+            (_CallableDoctorCheck("platform", _check_platform),),
         )
         checks = platform_check + core_checks
     else:

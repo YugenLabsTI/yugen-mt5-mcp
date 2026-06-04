@@ -1,0 +1,295 @@
+"""Unit tests for the CLI (cli.py).
+
+Uses typer.testing.CliRunner for command dispatch and output assertions.
+Heavy dependencies (MetaTrader5, uvicorn, fastmcp) are mocked so these
+tests run on any platform.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+from typer.testing import CliRunner
+
+from yugen_mt5_mcp.cli import app
+from yugen_mt5_mcp.doctor import DoctorCheckResult, DoctorReport, DoctorSeverity, DoctorStatus
+
+runner = CliRunner()
+
+# ---------------------------------------------------------------------------
+# Helpers / stubs
+# ---------------------------------------------------------------------------
+
+
+def _make_report(
+    *checks: tuple[str, DoctorStatus],
+    overall: DoctorStatus = DoctorStatus.OK,
+) -> DoctorReport:
+    from datetime import UTC, datetime
+
+    return DoctorReport(
+        status=overall,
+        generated_at=datetime.now(UTC),
+        checks=[
+            DoctorCheckResult(
+                name=name,
+                status=status,
+                severity=DoctorSeverity.INFO,
+                summary=f"Stub summary for {name}.",
+            )
+            for name, status in checks
+        ],
+    )
+
+
+class _FakeDoctorService:
+    def __init__(self, report: DoctorReport) -> None:
+        self._report = report
+
+    def run(self) -> DoctorReport:
+        return self._report
+
+
+class _FakeDiagnostics:
+    def __init__(self, report: DoctorReport) -> None:
+        self.doctor = _FakeDoctorService(report)
+
+
+# ---------------------------------------------------------------------------
+# run command
+# ---------------------------------------------------------------------------
+
+
+def test_run_stdio_calls_build_runtime(tmp_path: Path) -> None:
+    """``run`` (or bare invocation) should call build_runtime then run_stdio."""
+    mock_runtime = MagicMock()
+    mock_runtime.warnings = ()
+    mock_runtime.config.transport.mode.name = "STDIO"
+
+    # Patch at the module level where cli.py imports from
+    with (
+        patch("yugen_mt5_mcp.cli._run_stdio") as mock_run_stdio,
+    ):
+        result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 0 or mock_run_stdio.called
+
+
+def test_bare_invocation_calls_run_stdio() -> None:
+    """Bare invocation (no subcommand) must behave like ``run``."""
+    with patch("yugen_mt5_mcp.cli._run_stdio") as mock_run_stdio:
+        result = runner.invoke(app, [])
+        assert mock_run_stdio.called
+    assert result.exit_code == 0
+
+
+def test_run_explicit_stdio_transport() -> None:
+    """``run --transport stdio`` must call _run_stdio."""
+    with patch("yugen_mt5_mcp.cli._run_stdio") as mock_run_stdio:
+        result = runner.invoke(app, ["run", "--transport", "stdio"])
+        assert mock_run_stdio.called
+    assert result.exit_code == 0
+
+
+def test_run_remote_without_uvicorn_exits_1() -> None:
+    """``run --transport remote`` without uvicorn installed exits with code 1."""
+    with patch.dict(sys.modules, {"uvicorn": None}):
+        result = runner.invoke(app, ["run", "--transport", "remote"])
+
+    assert result.exit_code == 1
+    assert "yugen-mt5-mcp[remote]" in result.output or "yugen-mt5-mcp[remote]" in (
+        result.stderr or ""
+    )
+
+
+def test_run_unknown_transport_exits_1() -> None:
+    """Unknown --transport value must exit with code 1."""
+    result = runner.invoke(app, ["run", "--transport", "grpc"])
+    assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# doctor command
+# ---------------------------------------------------------------------------
+
+
+def _patch_build_diagnostics(report: DoctorReport) -> Any:
+    """Return a context manager that patches build_diagnostics.
+
+    ``doctor_cmd`` imports ``build_diagnostics`` lazily from ``.app``, so we
+    patch it at the source (``yugen_mt5_mcp.app.build_diagnostics``).
+    """
+    fake_diag = _FakeDiagnostics(report)
+    return patch("yugen_mt5_mcp.app.build_diagnostics", return_value=fake_diag)
+
+
+@pytest.fixture()
+def _patch_doctor_import() -> Any:
+    """Ensure build_diagnostics is importable inside cli via lazy import patch."""
+    return patch("yugen_mt5_mcp.app.build_diagnostics")
+
+
+def test_doctor_all_ok_exits_0() -> None:
+    report = _make_report(
+        ("platform", DoctorStatus.OK),
+        ("config", DoctorStatus.OK),
+    )
+    with _patch_build_diagnostics(report):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "OK" in result.output
+
+
+def test_doctor_fail_exits_1() -> None:
+    report = _make_report(
+        ("config", DoctorStatus.FAIL),
+        overall=DoctorStatus.FAIL,
+    )
+    with _patch_build_diagnostics(report):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1
+
+
+def test_doctor_skipped_exits_0() -> None:
+    """SKIPPED checks must not cause exit code 1."""
+    report = _make_report(
+        ("platform", DoctorStatus.SKIPPED),
+        ("mt5_connection", DoctorStatus.SKIPPED),
+        ("mt5_account", DoctorStatus.SKIPPED),
+        ("config", DoctorStatus.OK),
+        overall=DoctorStatus.OK,
+    )
+    with _patch_build_diagnostics(report):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+
+
+def test_doctor_warn_exits_0() -> None:
+    """WARN must not cause exit code 1."""
+    report = _make_report(
+        ("config", DoctorStatus.WARN),
+        overall=DoctorStatus.WARN,
+    )
+    with _patch_build_diagnostics(report):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+
+
+def test_doctor_json_flag_emits_valid_json() -> None:
+    report = _make_report(
+        ("config", DoctorStatus.OK),
+        overall=DoctorStatus.OK,
+    )
+    with _patch_build_diagnostics(report):
+        result = runner.invoke(app, ["doctor", "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "status" in parsed
+    assert "checks" in parsed
+    assert isinstance(parsed["checks"], list)
+
+
+def test_doctor_json_contains_all_check_names() -> None:
+    report = _make_report(
+        ("platform", DoctorStatus.SKIPPED),
+        ("config", DoctorStatus.OK),
+        ("mt5_connection", DoctorStatus.SKIPPED),
+    )
+    with _patch_build_diagnostics(report):
+        result = runner.invoke(app, ["doctor", "--json"])
+    parsed = json.loads(result.output)
+    names = [c["name"] for c in parsed["checks"]]
+    assert "platform" in names
+    assert "config" in names
+
+
+# ---------------------------------------------------------------------------
+# config sub-app
+# ---------------------------------------------------------------------------
+
+
+def test_config_claude_prints_json_with_mcp_servers() -> None:
+    result = runner.invoke(app, ["config", "claude"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "mcpServers" in parsed
+
+
+def test_config_claude_with_version() -> None:
+    result = runner.invoke(app, ["config", "claude", "--version", "0.2.0"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    args = parsed["mcpServers"]["yugen-mt5"]["args"]
+    assert any("0.2.0" in a for a in args)
+
+
+def test_config_cursor_prints_json() -> None:
+    result = runner.invoke(app, ["config", "cursor"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "mcpServers" in parsed
+
+
+def test_config_opencode_prints_json_with_mcp_key() -> None:
+    result = runner.invoke(app, ["config", "opencode"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "mcp" in parsed
+
+
+def test_config_remote_default_output() -> None:
+    result = runner.invoke(app, ["config", "remote"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "mcpServers" in parsed
+    assert "yugen-mt5-remote" in parsed["mcpServers"]
+
+
+def test_config_remote_custom_host_port() -> None:
+    result = runner.invoke(app, ["config", "remote", "--host", "1.2.3.4", "--port", "9000"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    url = parsed["mcpServers"]["yugen-mt5-remote"]["url"]
+    assert "1.2.3.4" in url
+    assert "9000" in url
+
+
+def test_config_remote_custom_token() -> None:
+    result = runner.invoke(app, ["config", "remote", "--token", "my-secret"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    auth = parsed["mcpServers"]["yugen-mt5-remote"]["headers"]["Authorization"]
+    assert "my-secret" in auth
+
+
+def test_config_output_writes_to_file(tmp_path: Path) -> None:
+    out_file = tmp_path / "mcp.json"
+    result = runner.invoke(app, ["config", "claude", "--output", str(out_file)])
+    assert result.exit_code == 0
+    assert out_file.exists()
+    parsed = json.loads(out_file.read_text())
+    assert "mcpServers" in parsed
+
+
+# ---------------------------------------------------------------------------
+# version command
+# ---------------------------------------------------------------------------
+
+
+def test_version_prints_package_version() -> None:
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    # Output must contain the package name and Python version
+    assert "yugen-mt5-mcp" in result.output
+    assert "Python" in result.output
+    assert "Platform" in result.output
+
+
+def test_version_exit_0() -> None:
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0

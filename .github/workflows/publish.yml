@@ -1,0 +1,55 @@
+name: Publish to PyPI
+
+# Triggered automatically by Release Please when it creates a GitHub Release.
+#
+# One-time setup required before the first publish:
+#   1. Create a GitHub environment named "pypi" in repo Settings → Environments.
+#   2. Register a Trusted Publisher on PyPI:
+#      https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+#      Use: owner=yugen, repo=yugen-mt5-mcp, workflow=publish.yml, env=pypi
+#
+# After that, no secrets are needed — OIDC handles authentication automatically.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # Required for OIDC Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No username/password needed — uses OIDC Trusted Publishing.
+        # Complete the one-time PyPI registration described at the top of this file.

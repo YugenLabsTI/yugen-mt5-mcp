@@ -113,6 +113,43 @@ def test_run_unknown_transport_exits_1() -> None:
     assert result.exit_code == 1
 
 
+def test_run_env_file_loads_values(tmp_path: Path) -> None:
+    """``--env-file`` values are parsed and passed to the runtime env."""
+    env_file = tmp_path / "demo.env"
+    env_file.write_text("YUGEN_MT5_ALLOWED_SYMBOLS=EURUSD,XAUUSD\n")
+
+    with patch("yugen_mt5_mcp.cli._run_stdio") as mock_run_stdio:
+        result = runner.invoke(app, ["run", "--env-file", str(env_file)])
+
+    assert result.exit_code == 0
+    assert mock_run_stdio.called
+    env = mock_run_stdio.call_args.kwargs["env"]
+    assert env["YUGEN_MT5_ALLOWED_SYMBOLS"] == "EURUSD,XAUUSD"
+
+
+def test_run_env_file_missing_exits_1(tmp_path: Path) -> None:
+    """A non-existent --env-file path must exit with code 1, not crash."""
+    missing = tmp_path / "nope.env"
+    result = runner.invoke(app, ["run", "--env-file", str(missing)])
+    assert result.exit_code == 1
+
+
+def test_run_real_env_overrides_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real environment variables win over --env-file values (precedence)."""
+    env_file = tmp_path / "demo.env"
+    env_file.write_text("YUGEN_MT5_DEFAULT_ACTOR=from_file\n")
+    monkeypatch.setenv("YUGEN_MT5_DEFAULT_ACTOR", "from_env")
+
+    with patch("yugen_mt5_mcp.cli._run_stdio") as mock_run_stdio:
+        result = runner.invoke(app, ["run", "--env-file", str(env_file)])
+
+    assert result.exit_code == 0
+    env = mock_run_stdio.call_args.kwargs["env"]
+    assert env["YUGEN_MT5_DEFAULT_ACTOR"] == "from_env"
+
+
 # ---------------------------------------------------------------------------
 # doctor command
 # ---------------------------------------------------------------------------

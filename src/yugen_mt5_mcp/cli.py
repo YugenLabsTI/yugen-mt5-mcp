@@ -50,12 +50,12 @@ def _default(ctx: typer.Context) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_stdio() -> None:
+def _run_stdio(env: dict[str, str] | None = None) -> None:
     """Start the MCP server in stdio mode (no-arg default path)."""
     from .app import build_runtime, emit_warnings, run_stdio  # noqa: PLC0415
     from .config import TransportMode  # noqa: PLC0415
 
-    runtime = build_runtime()
+    runtime = build_runtime(env=env)
     emit_warnings(runtime.warnings)
     if runtime.config.transport.mode is TransportMode.REMOTE:
         # Transport configured via env — honour it even on bare invocation.
@@ -73,6 +73,28 @@ def _start_remote(runtime: object) -> None:
     from .app import run_remote  # noqa: PLC0415
 
     run_remote(runtime.server, runtime.config.transport.remote, runtime.audit_store)  # type: ignore[attr-defined]
+
+
+def _resolve_env(env_file: Path | None) -> dict[str, str]:
+    """Build the runtime environment mapping from an optional ``--env-file``.
+
+    Values from *env_file* form the base; the real process environment is
+    overlaid on top, so explicit environment variables always win over the
+    file.  Uses ``dotenv_values`` (NOT ``load_dotenv``) so nothing mutates the
+    global ``os.environ`` as a side effect — loading stays explicit.
+    """
+    import os  # noqa: PLC0415
+
+    file_values: dict[str, str] = {}
+    if env_file is not None:
+        if not env_file.is_file():
+            typer.echo(f"env file not found: {env_file}", err=True)
+            raise typer.Exit(code=1)
+        from dotenv import dotenv_values  # noqa: PLC0415
+
+        file_values = {k: v for k, v in dotenv_values(env_file).items() if v is not None}
+
+    return {**file_values, **os.environ}
 
 
 @app.command("run")
@@ -97,16 +119,29 @@ def run_cmd(
         help="Port for remote transport.",
         show_default=True,
     ),
+    env_file: Path | None = typer.Option(
+        None,
+        "--env-file",
+        help="Load environment variables from a file (e.g. ./demo.env). "
+        "Real environment variables take precedence over the file.",
+        show_default=False,
+    ),
 ) -> None:
     """Start the MCP server.
 
     Default transport is stdio.  Use ``--transport remote`` to enable the HTTP
     transport (requires the ``[remote]`` extra: ``pip install
     'yugen-mt5-mcp[remote]'``).
+
+    Pass ``--env-file PATH`` to load configuration from a dotenv file instead of
+    exporting each variable by hand.  Useful for switching between demo/real
+    profiles without retyping the whole environment.
     """
     if transport not in ("stdio", "remote"):
         typer.echo(f"Unknown transport: {transport!r}. Choose 'stdio' or 'remote'.", err=True)
         raise typer.Exit(code=1)
+
+    env = _resolve_env(env_file)
 
     if transport == "remote":
         try:
@@ -118,12 +153,9 @@ def run_cmd(
             )
             raise typer.Exit(code=1) from None
 
-        import os  # noqa: PLC0415
-
         from .app import build_runtime, emit_warnings  # noqa: PLC0415
 
         # Allow CLI flags to override env vars for host/port.
-        env = dict(os.environ)
         env.setdefault("YUGEN_MT5_REMOTE_ENABLED", "true")
         env["YUGEN_MT5_REMOTE_HOST"] = host
         env["YUGEN_MT5_REMOTE_PORT"] = str(port)
@@ -132,7 +164,7 @@ def run_cmd(
         emit_warnings(runtime.warnings)
         _start_remote(runtime)
     else:
-        _run_stdio()
+        _run_stdio(env=env)
 
 
 # ---------------------------------------------------------------------------

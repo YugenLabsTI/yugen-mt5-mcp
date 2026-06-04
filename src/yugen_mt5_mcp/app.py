@@ -22,7 +22,7 @@ from .config import (
     TransportConfig,
     TransportMode,
 )
-from .doctor import DoctorService, DoctorStatus, create_default_doctor
+from .doctor import DoctorService, create_default_doctor
 from .market_data import MarketDataService
 from .mt5_adapter import MT5Adapter
 from .risk import RiskPolicy

@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -117,11 +116,11 @@ def run_cmd(
                 "Remote transport requires: pip install 'yugen-mt5-mcp[remote]'",
                 err=True,
             )
-            raise typer.Exit(code=1)
-
-        from .app import build_runtime, emit_warnings  # noqa: PLC0415
+            raise typer.Exit(code=1) from None
 
         import os  # noqa: PLC0415
+
+        from .app import build_runtime, emit_warnings  # noqa: PLC0415
 
         # Allow CLI flags to override env vars for host/port.
         env = dict(os.environ)
@@ -181,7 +180,8 @@ def doctor_cmd(
             DoctorStatus.SKIPPED: "SKIPPED",
         }
         col_width = max(len(c.name) for c in report.checks) + 2
-        typer.echo(f"\nyugen-mt5-mcp doctor — {report.generated_at.strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
+        generated = report.generated_at.strftime("%Y-%m-%d %H:%M:%S")
+        typer.echo(f"\nyugen-mt5-mcp doctor — {generated} UTC\n")
         for check in report.checks:
             icon = _STATUS_ICONS.get(check.status, check.status.value.upper())
             typer.echo(f"  {check.name:<{col_width}} [{icon}]  {check.summary}")
@@ -202,7 +202,7 @@ config_app = typer.Typer(help="Generate MCP client configuration.")
 app.add_typer(config_app, name="config")
 
 
-def _print_or_save(data: dict[str, object], output: Optional[Path]) -> None:
+def _print_or_save(data: dict[str, object], output: Path | None) -> None:
     """Print *data* as JSON to stdout, or write to *output* when given."""
     dumped = json.dumps(data, indent=2)
     if output is not None:
@@ -214,8 +214,8 @@ def _print_or_save(data: dict[str, object], output: Optional[Path]) -> None:
 
 @config_app.command("claude")
 def config_claude(
-    version: Optional[str] = typer.Option(None, "--version", "-v", help="Pin package version."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write config to file."),
+    version: str | None = typer.Option(None, "--version", "-v", help="Pin package version."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write config to file."),
 ) -> None:
     """Print the Claude Desktop MCP configuration block."""
     from .config_templates import claude_config  # noqa: PLC0415
@@ -225,8 +225,8 @@ def config_claude(
 
 @config_app.command("cursor")
 def config_cursor(
-    version: Optional[str] = typer.Option(None, "--version", "-v", help="Pin package version."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write config to file."),
+    version: str | None = typer.Option(None, "--version", "-v", help="Pin package version."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write config to file."),
 ) -> None:
     """Print the Cursor MCP configuration block."""
     from .config_templates import cursor_config  # noqa: PLC0415
@@ -236,8 +236,8 @@ def config_cursor(
 
 @config_app.command("opencode")
 def config_opencode(
-    version: Optional[str] = typer.Option(None, "--version", "-v", help="Pin package version."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write config to file."),
+    version: str | None = typer.Option(None, "--version", "-v", help="Pin package version."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write config to file."),
 ) -> None:
     """Print the OpenCode MCP configuration block.
 
@@ -254,7 +254,7 @@ def config_remote(
     host: str = typer.Option("127.0.0.1", "--host", help="Remote server host."),
     port: int = typer.Option(8765, "--port", help="Remote server port."),
     token: str = typer.Option("<BEARER_TOKEN>", "--token", help="Bearer token placeholder."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write config to file."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write config to file."),
 ) -> None:
     """Print a remote HTTP transport configuration block."""
     from .config_templates import remote_config  # noqa: PLC0415
@@ -270,7 +270,7 @@ def config_remote(
 @app.command("init")
 def init_cmd(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of KEY=VALUE."),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write output to file."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write output to file."),
 ) -> None:
     """Interactive wizard to generate YUGEN_MT5_* environment variables.
 

@@ -65,6 +65,11 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.ruff.lint.isort]
 known-first-party = ["yugen_mt5_mcp"]
 
+[tool.ruff.lint.flake8-bugbear]
+# typer.Option / typer.Argument as argument defaults is the idiomatic Typer
+# API, not a mutable-default bug. Mark them immutable so B008 stops flagging.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

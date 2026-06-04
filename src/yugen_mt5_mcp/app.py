@@ -22,7 +22,7 @@ from .config import (
     TransportConfig,
     TransportMode,
 )
-from .doctor import DoctorService, create_default_doctor
+from .doctor import DoctorService, DoctorStatus, create_default_doctor
 from .market_data import MarketDataService
 from .mt5_adapter import MT5Adapter
 from .risk import RiskPolicy
@@ -92,6 +92,18 @@ class RuntimeApp:
     warnings: tuple[EntrypointWarning, ...]
     config: AppConfig
     audit_store: AuditStore
+
+
+@dataclass(frozen=True, slots=True)
+class Diagnostics:
+    """Return-value container for the CLI doctor path.
+
+    Constructed by ``build_diagnostics()`` without starting the MCP server.
+    """
+
+    doctor: DoctorService
+    config: AppConfig
+    warnings: tuple[EntrypointWarning, ...]
 
 
 def parse_allowed_symbols(
@@ -390,6 +402,150 @@ def build_runtime(
         # for backward-compatibility.
         server = server_factory(market_data, doctor_service)
     return RuntimeApp(server=server, warnings=warnings, config=config, audit_store=audit_store)
+
+
+def build_diagnostics(
+    *,
+    env: Mapping[str, str] | None = None,
+    audit_path: Path | None = None,
+    adapter_factory: Callable[[], MT5Adapter] | None = None,
+) -> Diagnostics:
+    """Build config + doctor without starting the MCP server.
+
+    Platform-aware: on non-Windows, injects a no-op stub backend so MetaTrader5
+    is never imported.  On Windows, uses ``adapter_factory`` (default:
+    ``MT5Adapter`` with real backend via ``load_default_backend()``).
+
+    Never calls ``create_server()`` or any server-startup side-effect.
+    """
+    runtime_env = os.environ if env is None else env
+    resolved_audit_path = resolve_audit_path(runtime_env) if audit_path is None else audit_path
+    allowed_symbols, warnings = parse_allowed_symbols(runtime_env)
+    real_account_consent_env = _parse_consent_env(runtime_env)
+    allow_live_trading = _parse_true_false_env(runtime_env, ALLOW_LIVE_TRADING_ENV)
+    allow_real_accounts = _parse_true_false_env(runtime_env, ALLOW_REAL_ACCOUNTS_ENV)
+    max_symbol_exposure, exposure_warning = parse_risk_limit(
+        runtime_env, MAX_SYMBOL_EXPOSURE_ENV, default=DEFAULT_RISK_LIMIT
+    )
+    max_order_volume, order_volume_warning = parse_risk_limit(
+        runtime_env, MAX_ORDER_VOLUME_ENV, default=DEFAULT_RISK_LIMIT
+    )
+    warnings += tuple(w for w in (exposure_warning, order_volume_warning) if w is not None)
+
+    remote_cfg = parse_remote_transport_config(runtime_env)
+    transport_mode = TransportMode.REMOTE if remote_cfg.enabled else TransportMode.STDIO
+    transport = TransportConfig(mode=transport_mode, remote=remote_cfg)
+
+    config = AppConfig(
+        transport=transport,
+        audit=AuditConfig(database_path=resolved_audit_path),
+        risk=RiskConfig(
+            allowed_symbols=allowed_symbols,
+            allow_live_trading=allow_live_trading,
+            allow_real_accounts=allow_real_accounts,
+            real_account_consent_env=real_account_consent_env,
+            max_symbol_exposure=max_symbol_exposure,
+            max_order_volume=max_order_volume,
+        ),
+    )
+    config.validate_startup()
+
+    if adapter_factory is not None:
+        adapter = adapter_factory()
+    elif sys.platform == "win32":
+        adapter = MT5Adapter()
+    else:
+        adapter = MT5Adapter(backend=_NoOpMT5Backend())
+
+    audit_store = AuditStore(resolved_audit_path)
+    doctor_service = create_default_doctor(
+        config=config,
+        audit_store=audit_store,
+        adapter=adapter,
+        read_tool_names=None,  # CLI doctor path has no server; skip tool-registration check
+        entrypoint_warnings=warnings,
+        include_platform=True,
+        skip_mt5=(sys.platform != "win32"),
+    )
+    return Diagnostics(doctor=doctor_service, config=config, warnings=warnings)
+
+
+class _NoOpMT5Backend:
+    """Minimal no-op backend that satisfies MetaTrader5API without importing MT5.
+
+    Used by ``build_diagnostics()`` on non-Windows so the doctor can run its
+    structural (config, audit_path, runtime_context) checks without touching
+    the real MetaTrader5 module.  MT5-specific checks self-gate on sys.platform.
+    """
+
+    TIMEFRAME_M1 = 1
+    TIMEFRAME_M5 = 5
+    TIMEFRAME_H1 = 60
+    ACCOUNT_MARGIN_MODE_RETAIL_NETTING = 0
+    ACCOUNT_MARGIN_MODE_EXCHANGE = 1
+    ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
+    ACCOUNT_TRADE_MODE_DEMO = 0
+    ACCOUNT_TRADE_MODE_CONTEST = 1
+    ACCOUNT_TRADE_MODE_REAL = 2
+    TRADE_ACTION_DEAL = 1
+    TRADE_ACTION_SLTP = 6
+    TRADE_ACTION_PENDING = 5
+    TRADE_ACTION_REMOVE = 2
+    TRADE_ACTION_MODIFY = 8
+    ORDER_TYPE_BUY = 0
+    ORDER_TYPE_SELL = 1
+    ORDER_TYPE_BUY_LIMIT = 2
+    ORDER_TYPE_SELL_LIMIT = 3
+    ORDER_TYPE_BUY_STOP = 4
+    ORDER_TYPE_SELL_STOP = 5
+
+    def symbols_get(self) -> None:
+        return None
+
+    def symbol_select(self, symbol: str, enable: bool) -> bool:
+        return False
+
+    def symbol_info_tick(self, symbol: str) -> None:
+        return None
+
+    def copy_rates_from_pos(
+        self, symbol: str, timeframe: int, start_pos: int, count: int
+    ) -> None:
+        return None
+
+    def account_info(self) -> None:
+        return None
+
+    def positions_get(self, *, symbol: str | None = None) -> None:
+        return None
+
+    def orders_get(self, *, symbol: str | None = None) -> None:
+        return None
+
+    def history_deals_get(
+        self, date_from: object, date_to: object, *, group: str | None = None
+    ) -> None:
+        return None
+
+    def history_orders_get(
+        self, date_from: object, date_to: object, *, group: str | None = None
+    ) -> None:
+        return None
+
+    def order_check(self, request: object) -> None:
+        return None
+
+    def order_send(self, request: object) -> None:
+        return None
+
+    def last_error(self) -> tuple[int, str]:
+        return (0, "OK")
+
+    def initialize(self) -> bool:
+        return True
+
+    def shutdown(self) -> None:
+        pass
 
 
 def run_stdio(server: RunnableServer) -> None:

@@ -14,11 +14,27 @@ from typing import Any, Protocol, TypeVar, cast
 # ---------------------------------------------------------------------------
 # Stale-IPC error code allowlist (REQ-2.3)
 # ---------------------------------------------------------------------------
-# APPLY-TIME NOTE: this allowlist must be validated against a live terminal.
-# -10004 = "No IPC connection" is the only confirmed code.
-# Other candidates (-10003 "no connection", -10005 "timeout") need live-terminal
-# confirmation before being added here.  Unknown codes intentionally fail loud.
-STALE_IPC_ERROR_CODES: frozenset[int] = frozenset({-10004})
+# These are the MT5 IPC-bridge failure codes.  When the terminal IPC drops,
+# MetaTrader 5 returns one of these codes — all mean "the IPC bridge is broken"
+# and the correct response is to trigger a lazy reconnect.
+#
+# EMPIRICALLY CONFIRMED against a live Deriv terminal (2026-06):
+#   -10001  IPC send failed  ← CONFIRMED in live reconnect logs
+#   -10004  No IPC connection ← previously the only known code
+#
+# Full IPC-failure family (-10001..-10005, as documented in the MT5 SDK):
+#   -10001  IPC send failed
+#   -10002  IPC recv failed
+#   -10003  IPC init failed
+#   -10004  No IPC connection
+#   -10005  IPC timeout
+#
+# DELIBERATELY EXCLUDED:
+#   -1  ("Terminal: Call failed") = legitimate operation failure (e.g. wrong
+#       symbol name).  Observed live: "Boom 1000" vs "Boom 1000 Index" returns
+#       -1.  That is NOT a disconnect — it must fail loud.
+#   Any other non-IPC code must also fail loud (no silent swallow).
+STALE_IPC_ERROR_CODES: frozenset[int] = frozenset({-10001, -10002, -10003, -10004, -10005})
 
 # ---------------------------------------------------------------------------
 # Backoff constants (REQ-2.4, REQ-2.5)
@@ -596,17 +612,23 @@ class MT5Adapter:
     # Reconnect primitive (T-04 / REQ-1.1–1.5)
     # ------------------------------------------------------------------
 
-    def _reconnect(self, *, trigger: str) -> ConnectionState:
+    def _reconnect(self, *, trigger: str, call_attempt: int = 1) -> ConnectionState:
         """Shutdown then re-initialize the backend under self._lock.
 
         REQ-1.2: MUST be called while holding self._lock.
         REQ-1.4: logs attempt to stderr before each call.
         REQ-1.5: raises MT5AdapterError if initialize() returns falsy.
+
+        Args:
+            trigger: human-readable label for why the reconnect was requested.
+            call_attempt: 1-based index of this attempt within the CURRENT
+                _reconnect_with_backoff() call.  This is the per-call counter,
+                NOT the cumulative lifetime counter — so separate reconnect
+                calls always log attempt=1/MAX for their first retry.
         """
         code, detail = self._backend.last_error()
-        attempt_num = self._reconnect_attempts + 1
         print(
-            f"[mt5-reconnect] trigger={trigger} attempt={attempt_num}/{_RECONNECT_MAX_ATTEMPTS}"
+            f"[mt5-reconnect] trigger={trigger} attempt={call_attempt}/{_RECONNECT_MAX_ATTEMPTS}"
             f" last_error={code}:{detail}"
             f" ts={datetime.now(UTC).isoformat()}",
             file=sys.stderr,
@@ -617,7 +639,7 @@ class MT5Adapter:
             self._reconnect_attempts += 1
             self._last_reconnect_at = datetime.now(UTC)
             print(
-                f"[mt5-reconnect] FAILED trigger={trigger} attempt={attempt_num}"
+                f"[mt5-reconnect] FAILED trigger={trigger} attempt={call_attempt}"
                 f" last_error={code}:{detail}",
                 file=sys.stderr,
             )
@@ -662,7 +684,7 @@ class MT5Adapter:
                 time.sleep(delay)
             try:
                 with self._lock:
-                    state = self._reconnect(trigger=trigger)
+                    state = self._reconnect(trigger=trigger, call_attempt=attempt + 1)
                 # Verify liveness after lock is released
                 probe = self._backend.account_info()
                 if probe is not None:

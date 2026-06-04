@@ -126,6 +126,10 @@ def create_default_doctor(
                 "audit_path",
                 lambda: _check_audit_path(audit_store.database_path),
             ),
+            # REQ-5.6: mt5_connection BEFORE mt5_account — IPC liveness first.
+            _CallableDoctorCheck(
+                "mt5_connection", lambda: _check_mt5_connection(adapter)
+            ),
             _CallableDoctorCheck("mt5_account", lambda: _check_mt5_account(adapter)),
             _CallableDoctorCheck("read_tools", lambda: _check_read_tools(read_tool_names)),
             _CallableDoctorCheck(
@@ -220,6 +224,49 @@ def _check_mt5_account(adapter: MT5Adapter) -> DoctorCheckResult:
         severity=DoctorSeverity.INFO,
         summary=f"MT5 account {snapshot.login} on {snapshot.server} is readable.",
         details={"login": snapshot.login, "server": snapshot.server},
+    )
+
+
+def _check_mt5_connection(adapter: MT5Adapter) -> DoctorCheckResult:
+    """Observe-only IPC liveness check (REQ-5.1–5.6).
+
+    Calls ``adapter.connection_state()`` which is read-only and NEVER triggers
+    reconnect logic.  This function MUST NOT call ``_reconnect()`` or any
+    write/repair operation — see module docstring.
+    """
+    state = adapter.connection_state()
+    if state.connected:
+        return DoctorCheckResult(
+            name="mt5_connection",
+            status=DoctorStatus.OK,
+            severity=DoctorSeverity.INFO,
+            summary="MT5 IPC connection live.",
+            details={
+                "reconnect_attempts": state.reconnect_attempts,
+                "last_reconnect_at": (
+                    state.last_reconnect_at.isoformat() if state.last_reconnect_at else None
+                ),
+            },
+        )
+    return DoctorCheckResult(
+        name="mt5_connection",
+        status=DoctorStatus.FAIL,
+        severity=DoctorSeverity.CRITICAL,
+        summary=(
+            f"MT5 IPC connection is down "
+            f"(last_error={state.last_error_code}: {state.last_error_message})."
+        ),
+        details={
+            "last_error_code": state.last_error_code,
+            "last_error_message": state.last_error_message,
+            "reconnect_attempts": state.reconnect_attempts,
+            "last_reconnect_at": (
+                state.last_reconnect_at.isoformat() if state.last_reconnect_at else None
+            ),
+        },
+        remediation=(
+            "Call reconnect_mt5 to re-establish the IPC connection, then re-run doctor."
+        ),
     )
 
 

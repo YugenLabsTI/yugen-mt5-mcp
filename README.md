@@ -218,4 +218,4 @@ For all CLI options see [docs/cli.md](docs/cli.md). For installation variants se
 
 ## License
 
-MIT — see [LICENSE.md](LICENSE.md).
+Apache-2.0 — see [LICENSE.md](LICENSE.md). Copyright Yugen Labs S.A.S.

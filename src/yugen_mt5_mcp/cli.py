@@ -199,16 +199,29 @@ def run_cmd(
 @app.command("doctor")
 def doctor_cmd(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    env_file: Path | None = typer.Option(
+        None,
+        "--env-file",
+        help="Load environment variables from a file (e.g. ./demo.env). "
+        "Real environment variables take precedence over the file. "
+        "Enables the same provenance-aware config view as 'run --env-file'.",
+        show_default=False,
+    ),
 ) -> None:
     """Run readiness checks without starting the MCP server.
 
     Exits with code 1 if any check reports FAIL.  WARN and SKIPPED checks do
     not affect the exit code.
+
+    Pass ``--env-file PATH`` to diagnose exactly the configuration that
+    ``run --env-file PATH`` would use — including provenance tracking for
+    safety-critical keys.
     """
     from .app import build_diagnostics  # noqa: PLC0415
     from .doctor import DoctorStatus  # noqa: PLC0415
 
-    diagnostics = build_diagnostics()
+    env, provenance = resolve_env_with_provenance(env_file)
+    diagnostics = build_diagnostics(env=env, provenance=provenance)
     report = diagnostics.doctor.run()
 
     if json_output:

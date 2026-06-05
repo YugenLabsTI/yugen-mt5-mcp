@@ -409,6 +409,7 @@ def build_diagnostics(
     env: Mapping[str, str] | None = None,
     audit_path: Path | None = None,
     adapter_factory: Callable[[], MT5Adapter] | None = None,
+    provenance: Mapping[str, object] | None = None,
 ) -> Diagnostics:
     """Build config + doctor without starting the MCP server.
 
@@ -466,6 +467,7 @@ def build_diagnostics(
         entrypoint_warnings=warnings,
         include_platform=True,
         skip_mt5=(sys.platform != "win32"),
+        provenance=provenance,
     )
     return Diagnostics(doctor=doctor_service, config=config, warnings=warnings)
 

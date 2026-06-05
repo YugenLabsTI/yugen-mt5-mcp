@@ -121,6 +121,7 @@ def create_default_doctor(
     entrypoint_warnings: Sequence[RuntimeWarningLike] = (),
     include_platform: bool = False,
     skip_mt5: bool = False,
+    provenance: Mapping[str, object] | None = None,
 ) -> DoctorService:
     """Build the default DoctorService with the configured check set.
 

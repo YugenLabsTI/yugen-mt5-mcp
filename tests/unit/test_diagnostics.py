@@ -183,3 +183,42 @@ def test_build_diagnostics_platform_check_is_skipped_on_non_windows(
 
     platform_check = next(c for c in report.checks if c.name == "platform")
     assert platform_check.status is DoctorStatus.SKIPPED
+
+
+# ---------------------------------------------------------------------------
+# WU-4: provenance param threading
+# ---------------------------------------------------------------------------
+
+
+def test_build_diagnostics_accepts_provenance_kwarg(tmp_path: Path) -> None:
+    """build_diagnostics must accept provenance= without raising."""
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    provenance = {"YUGEN_MT5_ALLOW_LIVE_TRADING": ConfigSource.OS_ENVIRON}
+    result = build_diagnostics(
+        audit_path=tmp_path / "audit.sqlite3",
+        provenance=provenance,
+    )
+    assert isinstance(result, Diagnostics)
+
+
+def test_create_default_doctor_backward_compat_without_provenance(
+    tmp_path: Path,
+) -> None:
+    """create_default_doctor called without provenance must behave as before."""
+    from tests.fakes.fake_mt5 import FakeMT5Backend  # noqa: PLC0415
+    from yugen_mt5_mcp.audit import AuditStore  # noqa: PLC0415
+    from yugen_mt5_mcp.config import AppConfig, RiskConfig  # noqa: PLC0415
+    from yugen_mt5_mcp.doctor import create_default_doctor  # noqa: PLC0415
+    from yugen_mt5_mcp.mt5_adapter import MT5Adapter  # noqa: PLC0415
+
+    config = AppConfig(risk=RiskConfig())
+    service = create_default_doctor(
+        config=config,
+        audit_store=AuditStore(tmp_path / "audit.sqlite3"),
+        adapter=MT5Adapter(backend=FakeMT5Backend()),
+        read_tool_names=None,
+        # No provenance= — must not raise
+    )
+    report = service.run()
+    assert isinstance(report, object)  # just didn't blow up

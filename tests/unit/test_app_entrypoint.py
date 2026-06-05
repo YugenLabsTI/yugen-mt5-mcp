@@ -111,7 +111,8 @@ def test_build_runtime_parses_live_trading_env_flags_as_true_false(
 
     def server_factory(market_data: MarketDataService, doctor_service: DoctorService) -> FakeServer:
         created_configs.append(market_data._config)
-        assert doctor_service.run().status is DoctorStatus.OK
+        # live_trading_gate=WARN when allow_live_trading=true, so overall is WARN (not FAIL)
+        assert doctor_service.run().status is not DoctorStatus.FAIL
         return FakeServer()
 
     build_runtime(

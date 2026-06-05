@@ -111,6 +111,8 @@ def test_create_default_doctor_reports_healthy_passive_runtime(tmp_path: Path) -
         "mt5_connection",
         "mt5_account",
         "real_account_consent",
+        "live_trading_gate",
+        "real_accounts_gate",
         "read_tools",
     ]
     assert all(check.status is DoctorStatus.OK for check in report.checks)

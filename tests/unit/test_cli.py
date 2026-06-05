@@ -314,6 +314,169 @@ def test_config_output_writes_to_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WU-6: doctor --env-file plumbing tests
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_env_file_passes_provenance_to_build_diagnostics(
+    tmp_path: Path,
+) -> None:
+    """doctor --env-file must call build_diagnostics with a provenance kwarg."""
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=true\n")
+
+    captured_kwargs: dict[str, Any] = {}
+
+    def _fake_build(**kwargs: Any) -> Any:
+        captured_kwargs.update(kwargs)
+        report = _make_report(("config", DoctorStatus.OK))
+        return _FakeDiagnostics(report)
+
+    with patch("yugen_mt5_mcp.app.build_diagnostics", side_effect=_fake_build):
+        result = runner.invoke(app, ["doctor", "--env-file", str(env_file)])
+
+    assert result.exit_code == 0
+    assert "provenance" in captured_kwargs
+    assert captured_kwargs["provenance"] is not None
+
+
+def test_doctor_env_file_missing_exits_1(tmp_path: Path) -> None:
+    """doctor --env-file with a nonexistent path must exit 1."""
+    missing = tmp_path / "nonexistent.env"
+    result = runner.invoke(app, ["doctor", "--env-file", str(missing)])
+    assert result.exit_code == 1
+
+
+def test_doctor_no_env_file_still_works() -> None:
+    """doctor without --env-file still works (backward compat)."""
+    report = _make_report(("config", DoctorStatus.OK))
+    with _patch_build_diagnostics(report):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+
+
+def test_doctor_env_file_os_environ_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When env-file has a key but os.environ overrides it, provenance must be OS_ENVIRON."""
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=false\n")
+    monkeypatch.setenv("YUGEN_MT5_ALLOW_LIVE_TRADING", "true")
+
+    captured_provenance: dict[str, Any] = {}
+
+    def _fake_build(**kwargs: Any) -> Any:
+        captured_provenance.update(kwargs.get("provenance", {}))
+        report = _make_report(("config", DoctorStatus.OK))
+        return _FakeDiagnostics(report)
+
+    with patch("yugen_mt5_mcp.app.build_diagnostics", side_effect=_fake_build):
+        result = runner.invoke(app, ["doctor", "--env-file", str(env_file)])
+
+    assert result.exit_code == 0
+    assert captured_provenance.get("YUGEN_MT5_ALLOW_LIVE_TRADING") is ConfigSource.OS_ENVIRON
+
+
+# ---------------------------------------------------------------------------
+# WU-3: resolve_env_with_provenance tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_env_with_provenance_file_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Key present only in env-file → source=ENV_FILE."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=true\n")
+    monkeypatch.delenv("YUGEN_MT5_ALLOW_LIVE_TRADING", raising=False)
+
+    _env, provenance = resolve_env_with_provenance(env_file)
+
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.ENV_FILE
+
+
+def test_resolve_env_with_provenance_os_environ_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Key in both → os.environ wins, source=OS_ENVIRON."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=false\n")
+    monkeypatch.setenv("YUGEN_MT5_ALLOW_LIVE_TRADING", "true")
+
+    env, provenance = resolve_env_with_provenance(env_file)
+
+    assert env["YUGEN_MT5_ALLOW_LIVE_TRADING"] == "true"
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.OS_ENVIRON
+
+
+def test_resolve_env_with_provenance_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Key absent from both → source=DEFAULT."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("SOME_OTHER_KEY=irrelevant\n")
+    monkeypatch.delenv("YUGEN_MT5_ALLOW_LIVE_TRADING", raising=False)
+
+    _env, provenance = resolve_env_with_provenance(env_file)
+
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.DEFAULT
+
+
+def test_resolve_env_backward_compat_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_resolve_env still returns plain dict with same values as before refactor."""
+    from yugen_mt5_mcp.cli import _resolve_env  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=false\n")
+    monkeypatch.setenv("YUGEN_MT5_ALLOW_LIVE_TRADING", "true")
+
+    result = _resolve_env(env_file)
+
+    assert isinstance(result, dict)
+    assert result["YUGEN_MT5_ALLOW_LIVE_TRADING"] == "true"
+
+
+def test_resolve_env_with_provenance_missing_file_exits_1(tmp_path: Path) -> None:
+    """resolve_env_with_provenance raises typer.Exit(1) on missing file."""
+    import typer  # noqa: PLC0415
+
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+
+    missing = tmp_path / "nonexistent.env"
+    with pytest.raises(typer.Exit):
+        resolve_env_with_provenance(missing)
+
+
+def test_resolve_env_with_provenance_none_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resolve_env_with_provenance(None) works: no file_values, sources from os.environ."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    monkeypatch.setenv("YUGEN_MT5_ALLOW_LIVE_TRADING", "true")
+    monkeypatch.delenv("YUGEN_MT5_ALLOW_REAL_ACCOUNTS", raising=False)
+
+    env, provenance = resolve_env_with_provenance(None)
+
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.OS_ENVIRON
+    assert provenance["YUGEN_MT5_ALLOW_REAL_ACCOUNTS"] is ConfigSource.DEFAULT
+
+
+# ---------------------------------------------------------------------------
 # version command
 # ---------------------------------------------------------------------------
 

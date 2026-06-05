@@ -319,6 +319,8 @@ def test_server_registers_doctor_tool_without_changing_read_tools(tmp_path: Path
         "mt5_connection",
         "mt5_account",
         "real_account_consent",
+        "live_trading_gate",
+        "real_accounts_gate",
         "read_tools",
     ]
     runtime_ctx = next(c for c in checks if c["name"] == "runtime_context")

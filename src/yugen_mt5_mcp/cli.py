@@ -18,8 +18,12 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    from .provenance import ConfigSource
 
 # ---------------------------------------------------------------------------
 # Top-level Typer application
@@ -75,15 +79,23 @@ def _start_remote(runtime: object) -> None:
     run_remote(runtime.server, runtime.config.transport.remote, runtime.audit_store)  # type: ignore[attr-defined]
 
 
-def _resolve_env(env_file: Path | None) -> dict[str, str]:
-    """Build the runtime environment mapping from an optional ``--env-file``.
+def resolve_env_with_provenance(
+    env_file: Path | None,
+) -> tuple[dict[str, str], dict[str, ConfigSource]]:
+    """Build the runtime environment mapping AND provenance sidecar.
 
     Values from *env_file* form the base; the real process environment is
     overlaid on top, so explicit environment variables always win over the
     file.  Uses ``dotenv_values`` (NOT ``load_dotenv``) so nothing mutates the
     global ``os.environ`` as a side effect — loading stays explicit.
+
+    Returns ``(merged_env, provenance_map)`` where *provenance_map* is a
+    ``dict[str, ConfigSource]`` tracking the origin of each
+    ``SAFETY_CRITICAL_KEYS`` entry.
     """
     import os  # noqa: PLC0415
+
+    from .provenance import SAFETY_CRITICAL_KEYS, derive_provenance  # noqa: PLC0415
 
     file_values: dict[str, str] = {}
     if env_file is not None:
@@ -94,7 +106,19 @@ def _resolve_env(env_file: Path | None) -> dict[str, str]:
 
         file_values = {k: v for k, v in dotenv_values(env_file).items() if v is not None}
 
-    return {**file_values, **os.environ}
+    merged: dict[str, str] = {**file_values, **os.environ}
+    provenance = derive_provenance(file_values, os.environ, SAFETY_CRITICAL_KEYS)
+    return merged, provenance
+
+
+def _resolve_env(env_file: Path | None) -> dict[str, str]:
+    """Build the runtime environment mapping from an optional ``--env-file``.
+
+    Thin wrapper around ``resolve_env_with_provenance`` that discards the
+    provenance sidecar.  Preserves the existing ``{**file_values, **os.environ}``
+    return value byte-for-bit.
+    """
+    return resolve_env_with_provenance(env_file)[0]
 
 
 @app.command("run")
@@ -175,16 +199,29 @@ def run_cmd(
 @app.command("doctor")
 def doctor_cmd(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    env_file: Path | None = typer.Option(
+        None,
+        "--env-file",
+        help="Load environment variables from a file (e.g. ./demo.env). "
+        "Real environment variables take precedence over the file. "
+        "Enables the same provenance-aware config view as 'run --env-file'.",
+        show_default=False,
+    ),
 ) -> None:
     """Run readiness checks without starting the MCP server.
 
     Exits with code 1 if any check reports FAIL.  WARN and SKIPPED checks do
     not affect the exit code.
+
+    Pass ``--env-file PATH`` to diagnose exactly the configuration that
+    ``run --env-file PATH`` would use — including provenance tracking for
+    safety-critical keys.
     """
     from .app import build_diagnostics  # noqa: PLC0415
     from .doctor import DoctorStatus  # noqa: PLC0415
 
-    diagnostics = build_diagnostics()
+    env, provenance = resolve_env_with_provenance(env_file)
+    diagnostics = build_diagnostics(env=env, provenance=provenance)
     report = diagnostics.doctor.run()
 
     if json_output:

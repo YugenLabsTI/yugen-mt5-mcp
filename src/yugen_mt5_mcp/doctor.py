@@ -121,6 +121,7 @@ def create_default_doctor(
     entrypoint_warnings: Sequence[RuntimeWarningLike] = (),
     include_platform: bool = False,
     skip_mt5: bool = False,
+    provenance: Mapping[str, object] | None = None,
 ) -> DoctorService:
     """Build the default DoctorService with the configured check set.
 
@@ -206,7 +207,15 @@ def create_default_doctor(
             *mt5_checks,
             _CallableDoctorCheck(
                 "real_account_consent",
-                lambda: _check_real_account_consent(config),
+                lambda: _check_real_account_consent(config, provenance),
+            ),
+            _CallableDoctorCheck(
+                "live_trading_gate",
+                lambda: _check_live_trading_gate(config, provenance),
+            ),
+            _CallableDoctorCheck(
+                "real_accounts_gate",
+                lambda: _check_real_accounts_gate(config, provenance),
             ),
             *read_tools_checks,
         ),
@@ -397,22 +406,45 @@ def _check_runtime_context(
     )
 
 
-def _check_real_account_consent(config: AppConfig) -> DoctorCheckResult:
+_CONSENT_KEY = "YUGEN_MT5_REAL_ACCOUNT_CONSENT"
+_LIVE_TRADING_KEY = "YUGEN_MT5_ALLOW_LIVE_TRADING"
+_REAL_ACCOUNTS_KEY = "YUGEN_MT5_ALLOW_REAL_ACCOUNTS"
+
+
+def _check_real_account_consent(
+    config: AppConfig, provenance: Mapping[str, object] | None = None
+) -> DoctorCheckResult:
     """Passive check: emit WARNING when ambient env-var consent is active.
 
     Real-account consent via environment variable (real_account_consent_env=True)
     means ANY session can place real-money trades without explicit per-session
     human acknowledgement.  This is intentional but must remain visible.
     The check is purely passive — it reads config only, no state mutations.
+
+    When *provenance* is provided, the ``source`` detail key is populated from
+    the provenance map.  When absent, ``source`` defaults to ``"os.environ"``
+    (consent active) or ``"session"`` (consent not active) to preserve prior
+    semantics.
     """
+    from .provenance import ConfigSource  # noqa: PLC0415
+
     if config.risk.real_account_consent_env:
+        if provenance is not None:
+            source: object = provenance.get(_CONSENT_KEY, ConfigSource.DEFAULT)
+        else:
+            source = ConfigSource.OS_ENVIRON
+        source_value = source.value if isinstance(source, ConfigSource) else str(source)
+        summary = (
+            f"Real-account trading consent is pre-authorized via environment variable "
+            f"(source: {source_value})."
+        )
         return DoctorCheckResult(
             name="real_account_consent",
             status=DoctorStatus.WARN,
             severity=DoctorSeverity.WARNING,
-            summary="Real-account trading consent is pre-authorized via environment variable.",
+            summary=summary,
             details={
-                "consent_source": "env",
+                "source": source_value,
                 "allow_real_accounts": config.risk.allow_real_accounts,
             },
             remediation=(
@@ -425,7 +457,75 @@ def _check_real_account_consent(config: AppConfig) -> DoctorCheckResult:
         status=DoctorStatus.OK,
         severity=DoctorSeverity.INFO,
         summary="Real-account consent requires explicit per-session acknowledgement.",
-        details={"consent_source": "session"},
+        details={"source": "session"},
+    )
+
+
+def _check_live_trading_gate(
+    config: AppConfig, provenance: Mapping[str, object] | None = None
+) -> DoctorCheckResult:
+    """Passive check: warn when live trading is enabled, naming the config source.
+
+    Always passive — reads config and provenance only, no state mutations.
+    """
+    from .provenance import ConfigSource  # noqa: PLC0415
+
+    if provenance is not None:
+        source: object = provenance.get(_LIVE_TRADING_KEY, ConfigSource.DEFAULT)
+    else:
+        source = ConfigSource.DEFAULT
+    source_value = source.value if isinstance(source, ConfigSource) else str(source)
+
+    if config.risk.allow_live_trading:
+        return DoctorCheckResult(
+            name="live_trading_gate",
+            status=DoctorStatus.WARN,
+            severity=DoctorSeverity.WARNING,
+            summary=(
+                f"Live trading is enabled (allow_live_trading=true, source: {source_value})."
+            ),
+            details={"source": source_value, "allow_live_trading": True},
+        )
+    return DoctorCheckResult(
+        name="live_trading_gate",
+        status=DoctorStatus.OK,
+        severity=DoctorSeverity.INFO,
+        summary="Live trading is disabled (demo/backtest only).",
+        details={"source": source_value, "allow_live_trading": False},
+    )
+
+
+def _check_real_accounts_gate(
+    config: AppConfig, provenance: Mapping[str, object] | None = None
+) -> DoctorCheckResult:
+    """Passive check: warn when real accounts are enabled, naming the config source.
+
+    Always passive — reads config and provenance only, no state mutations.
+    """
+    from .provenance import ConfigSource  # noqa: PLC0415
+
+    if provenance is not None:
+        source: object = provenance.get(_REAL_ACCOUNTS_KEY, ConfigSource.DEFAULT)
+    else:
+        source = ConfigSource.DEFAULT
+    source_value = source.value if isinstance(source, ConfigSource) else str(source)
+
+    if config.risk.allow_real_accounts:
+        return DoctorCheckResult(
+            name="real_accounts_gate",
+            status=DoctorStatus.WARN,
+            severity=DoctorSeverity.WARNING,
+            summary=(
+                f"Real accounts are enabled (allow_real_accounts=true, source: {source_value})."
+            ),
+            details={"source": source_value, "allow_real_accounts": True},
+        )
+    return DoctorCheckResult(
+        name="real_accounts_gate",
+        status=DoctorStatus.OK,
+        severity=DoctorSeverity.INFO,
+        summary="Real accounts are disabled.",
+        details={"source": source_value, "allow_real_accounts": False},
     )
 
 

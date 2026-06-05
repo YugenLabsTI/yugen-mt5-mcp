@@ -18,8 +18,12 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    from .provenance import ConfigSource
 
 # ---------------------------------------------------------------------------
 # Top-level Typer application
@@ -75,15 +79,23 @@ def _start_remote(runtime: object) -> None:
     run_remote(runtime.server, runtime.config.transport.remote, runtime.audit_store)  # type: ignore[attr-defined]
 
 
-def _resolve_env(env_file: Path | None) -> dict[str, str]:
-    """Build the runtime environment mapping from an optional ``--env-file``.
+def resolve_env_with_provenance(
+    env_file: Path | None,
+) -> tuple[dict[str, str], dict[str, ConfigSource]]:
+    """Build the runtime environment mapping AND provenance sidecar.
 
     Values from *env_file* form the base; the real process environment is
     overlaid on top, so explicit environment variables always win over the
     file.  Uses ``dotenv_values`` (NOT ``load_dotenv``) so nothing mutates the
     global ``os.environ`` as a side effect — loading stays explicit.
+
+    Returns ``(merged_env, provenance_map)`` where *provenance_map* is a
+    ``dict[str, ConfigSource]`` tracking the origin of each
+    ``SAFETY_CRITICAL_KEYS`` entry.
     """
     import os  # noqa: PLC0415
+
+    from .provenance import SAFETY_CRITICAL_KEYS, derive_provenance  # noqa: PLC0415
 
     file_values: dict[str, str] = {}
     if env_file is not None:
@@ -94,7 +106,19 @@ def _resolve_env(env_file: Path | None) -> dict[str, str]:
 
         file_values = {k: v for k, v in dotenv_values(env_file).items() if v is not None}
 
-    return {**file_values, **os.environ}
+    merged: dict[str, str] = {**file_values, **os.environ}
+    provenance = derive_provenance(file_values, os.environ, SAFETY_CRITICAL_KEYS)
+    return merged, provenance
+
+
+def _resolve_env(env_file: Path | None) -> dict[str, str]:
+    """Build the runtime environment mapping from an optional ``--env-file``.
+
+    Thin wrapper around ``resolve_env_with_provenance`` that discards the
+    provenance sidecar.  Preserves the existing ``{**file_values, **os.environ}``
+    return value byte-for-bit.
+    """
+    return resolve_env_with_provenance(env_file)[0]
 
 
 @app.command("run")

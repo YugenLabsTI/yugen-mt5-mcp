@@ -314,6 +314,103 @@ def test_config_output_writes_to_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WU-3: resolve_env_with_provenance tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_env_with_provenance_file_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Key present only in env-file → source=ENV_FILE."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=true\n")
+    monkeypatch.delenv("YUGEN_MT5_ALLOW_LIVE_TRADING", raising=False)
+
+    _env, provenance = resolve_env_with_provenance(env_file)
+
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.ENV_FILE
+
+
+def test_resolve_env_with_provenance_os_environ_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Key in both → os.environ wins, source=OS_ENVIRON."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=false\n")
+    monkeypatch.setenv("YUGEN_MT5_ALLOW_LIVE_TRADING", "true")
+
+    env, provenance = resolve_env_with_provenance(env_file)
+
+    assert env["YUGEN_MT5_ALLOW_LIVE_TRADING"] == "true"
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.OS_ENVIRON
+
+
+def test_resolve_env_with_provenance_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Key absent from both → source=DEFAULT."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("SOME_OTHER_KEY=irrelevant\n")
+    monkeypatch.delenv("YUGEN_MT5_ALLOW_LIVE_TRADING", raising=False)
+
+    _env, provenance = resolve_env_with_provenance(env_file)
+
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.DEFAULT
+
+
+def test_resolve_env_backward_compat_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_resolve_env still returns plain dict with same values as before refactor."""
+    from yugen_mt5_mcp.cli import _resolve_env  # noqa: PLC0415
+
+    env_file = tmp_path / "test.env"
+    env_file.write_text("YUGEN_MT5_ALLOW_LIVE_TRADING=false\n")
+    monkeypatch.setenv("YUGEN_MT5_ALLOW_LIVE_TRADING", "true")
+
+    result = _resolve_env(env_file)
+
+    assert isinstance(result, dict)
+    assert result["YUGEN_MT5_ALLOW_LIVE_TRADING"] == "true"
+
+
+def test_resolve_env_with_provenance_missing_file_exits_1(tmp_path: Path) -> None:
+    """resolve_env_with_provenance raises typer.Exit(1) on missing file."""
+    import typer  # noqa: PLC0415
+
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+
+    missing = tmp_path / "nonexistent.env"
+    with pytest.raises(typer.Exit):
+        resolve_env_with_provenance(missing)
+
+
+def test_resolve_env_with_provenance_none_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resolve_env_with_provenance(None) works: no file_values, sources from os.environ."""
+    from yugen_mt5_mcp.cli import resolve_env_with_provenance  # noqa: PLC0415
+    from yugen_mt5_mcp.provenance import ConfigSource  # noqa: PLC0415
+
+    monkeypatch.setenv("YUGEN_MT5_ALLOW_LIVE_TRADING", "true")
+    monkeypatch.delenv("YUGEN_MT5_ALLOW_REAL_ACCOUNTS", raising=False)
+
+    env, provenance = resolve_env_with_provenance(None)
+
+    assert provenance["YUGEN_MT5_ALLOW_LIVE_TRADING"] is ConfigSource.OS_ENVIRON
+    assert provenance["YUGEN_MT5_ALLOW_REAL_ACCOUNTS"] is ConfigSource.DEFAULT
+
+
+# ---------------------------------------------------------------------------
 # version command
 # ---------------------------------------------------------------------------
 

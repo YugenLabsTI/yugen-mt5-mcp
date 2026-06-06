@@ -1,0 +1,77 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/refs/heads/main/schemas/server.schema.json",
+  "name": "io.github.yugenlabsti/yugen-mt5-mcp",
+  "title": "Yugen MT5 MCP",
+  "description": "Secure, auditable MCP server for MetaTrader 5. Provides AI clients with controlled access to market data, account state, and trade execution through a hardened gate with allowlists, volume limits, and an append-only audit trail.",
+  "repository": {
+    "url": "https://github.com/YugenLabsTI/yugen-mt5-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "yugen-mt5-mcp",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "YUGEN_MT5_ALLOWED_SYMBOLS",
+          "description": "Comma-separated list of symbols the server may read and trade (e.g. 'EURUSD,XAUUSD'), or '*' to allow every symbol. Wildcard mode prints a startup warning and does not relax any trading gate.",
+          "isRequired": true
+        },
+        {
+          "name": "YUGEN_MT5_ALLOW_LIVE_TRADING",
+          "description": "Set to 'true' to enable order execution (open_position, place_pending_order). Defaults to 'false', which makes the server read-only regardless of account type.",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_ALLOW_REAL_ACCOUNTS",
+          "description": "Set to 'true' to permit operations on real (non-demo) MT5 accounts. Defaults to 'false'. Demo accounts do not need this flag.",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_MAX_ORDER_VOLUME",
+          "description": "Maximum lot volume allowed in a single exposure-creating order (open_position or place_pending_order). Does not apply to closing or modifying orders. Defaults to '1.0'. Set to 'unlimited' to disable (prints a startup warning).",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_MAX_SYMBOL_EXPOSURE",
+          "description": "Maximum cumulative open volume allowed across all positions in the same symbol. Checked only when opening. Defaults to '1.0'. Set to 'unlimited' to disable (prints a startup warning).",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_AUDIT_PATH",
+          "description": "Filesystem path for the SQLite audit database. Defaults to 'var/audit.sqlite3' relative to the working directory. Use an absolute path when running from a desktop MCP client so audit storage lands in a user-writable directory (e.g. 'C:\\Users\\YOUR_USERNAME\\AppData\\Local\\Yugen\\mt5-mcp\\audit.sqlite3').",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_REAL_ACCOUNT_CONSENT",
+          "description": "Explicit consent token required for real-account operations when YUGEN_MT5_ALLOW_REAL_ACCOUNTS is 'true'. Resets on every server restart — consent is session-scoped.",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_REMOTE_ENABLED",
+          "description": "Set to 'true' to start the HTTP remote transport instead of stdio. Requires the '[remote]' extra: pip install 'yugen-mt5-mcp[remote]'.",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_REMOTE_HOST",
+          "description": "Host address the remote HTTP transport binds to. Defaults to '127.0.0.1' (loopback). Set to '0.0.0.0' for LAN/VPS use — requires TLS termination on public binds.",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_REMOTE_PORT",
+          "description": "Port the remote HTTP transport listens on. Defaults to '8765'.",
+          "isRequired": false
+        },
+        {
+          "name": "YUGEN_MT5_REMOTE_BEARER_TOKEN",
+          "description": "Bearer token that remote clients must include in the Authorization header. Required when YUGEN_MT5_REMOTE_ENABLED is 'true'. Omitting this token causes startup rejection.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

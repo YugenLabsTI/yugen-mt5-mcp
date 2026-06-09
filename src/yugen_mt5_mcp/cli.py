@@ -323,12 +323,23 @@ def config_remote(
     host: str = typer.Option("127.0.0.1", "--host", help="Remote server host."),
     port: int = typer.Option(8765, "--port", help="Remote server port."),
     token: str = typer.Option("<BEARER_TOKEN>", "--token", help="Bearer token placeholder."),
+    scheme: str = typer.Option(
+        "auto",
+        "--scheme",
+        help="URL scheme: auto (infer from host trust tier), http, or https.",
+    ),
     output: Path | None = typer.Option(None, "--output", "-o", help="Write config to file."),
 ) -> None:
     """Print a remote HTTP transport configuration block."""
+    if scheme not in ("auto", "http", "https"):
+        raise typer.BadParameter(
+            f"Invalid scheme {scheme!r}. Must be one of: auto, http, https.",
+            param_hint="'--scheme'",
+        )
+
     from .config_templates import remote_config  # noqa: PLC0415
 
-    _print_or_save(remote_config(host=host, port=port, token=token), output)
+    _print_or_save(remote_config(host=host, port=port, token=token, scheme=scheme), output)
 
 
 # ---------------------------------------------------------------------------

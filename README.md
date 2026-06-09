@@ -36,6 +36,9 @@ This runs all readiness checks (config, MT5 connection, audit path, transport) w
 
 ## Client Configuration
 
+> For the complete connection guide covering all 4 methods (STDIO, LAN remote, VPS/TLS),
+> see [docs/connection-methods.md](docs/connection-methods.md).
+
 ### Claude Desktop
 
 Add the following to your Claude Desktop config file.
@@ -177,6 +180,7 @@ uv tool install "yugen-mt5-mcp[remote]"
 ```
 
 See [docs/remote-transport.md](docs/remote-transport.md) for the full deployment guide, security model, and TLS setup.
+For the step-by-step VPS (EC2 + Caddy/TLS) walkthrough, see [docs/connection-methods.md — Method 4](docs/connection-methods.md#method-4--remote-vps--caddytls).
 
 ---
 

@@ -25,6 +25,7 @@ renewal automatically.
 | `YUGEN_MT5_REMOTE_ENABLED` | bool (`true`/`false`) | `false` | Switches from stdio to HTTP transport |
 | `YUGEN_MT5_REMOTE_HOST` | string | `127.0.0.1` | Bind address for the HTTP listener |
 | `YUGEN_MT5_REMOTE_PORT` | int 1–65535 | `8765` | Port for the HTTP listener |
+| `YUGEN_MT5_REMOTE_PATH` | string | `/mcp/` | HTTP path served by the remote transport |
 | `YUGEN_MT5_REMOTE_BEARER_TOKEN` | string | required when enabled | Secret token — clients must send `Authorization: Bearer <token>` |
 | `YUGEN_MT5_REMOTE_TLS_TERMINATED` | bool | `false` | Set to `true` when an upstream proxy handles TLS (declaration only, not enforced per-request) |
 | `YUGEN_MT5_REMOTE_ALLOWLIST` | comma-separated CIDRs or `*` | loopback + RFC 1918 | IP allowlist for incoming connections; `*` means allow any IP |

@@ -201,3 +201,52 @@ def test_remote_config_reflects_custom_token() -> None:
     cfg = remote_config(token="my-secret-token")
     auth = cfg["mcpServers"]["yugen-mt5-remote"]["headers"]["Authorization"]  # type: ignore[index]
     assert "my-secret-token" in auth
+
+
+# ---------------------------------------------------------------------------
+# remote_config scheme inference and trailing slash (T2 RED → T3 GREEN)
+# ---------------------------------------------------------------------------
+
+
+def _url(cfg: dict[str, object]) -> str:
+    servers = cfg["mcpServers"]
+    return str(servers["yugen-mt5-remote"]["url"])  # type: ignore[index]
+
+
+def test_remote_config_loopback_infers_http_with_trailing_slash() -> None:
+    cfg = remote_config(host="127.0.0.1", port=8765, token="t")
+    assert _url(cfg) == "http://127.0.0.1:8765/mcp/"
+
+
+def test_remote_config_rfc1918_infers_http() -> None:
+    cfg = remote_config(host="192.168.1.100", port=8765, token="t")
+    assert _url(cfg).startswith("http://")
+    assert _url(cfg).endswith("/mcp/")
+
+
+def test_remote_config_public_ip_infers_https() -> None:
+    cfg = remote_config(host="203.0.113.5", port=8765, token="t")
+    assert _url(cfg).startswith("https://")
+    assert _url(cfg).endswith("/mcp/")
+
+
+def test_remote_config_domain_defaults_https() -> None:
+    cfg = remote_config(host="mcp.example.com", port=443, token="t")
+    assert _url(cfg).startswith("https://")
+    assert _url(cfg).endswith("/mcp/")
+
+
+def test_remote_config_scheme_override_http_on_public() -> None:
+    cfg = remote_config(host="203.0.113.5", port=8765, token="t", scheme="http")
+    assert _url(cfg).startswith("http://")
+
+
+def test_remote_config_scheme_override_https_on_loopback() -> None:
+    cfg = remote_config(host="127.0.0.1", port=8765, token="t", scheme="https")
+    assert _url(cfg).startswith("https://")
+
+
+def test_remote_config_url_always_has_trailing_slash() -> None:
+    for host in ("127.0.0.1", "203.0.113.5"):
+        cfg = remote_config(host=host, port=8765, token="t")
+        assert _url(cfg).endswith("/mcp/"), f"Missing trailing slash for host={host}"

@@ -210,19 +210,20 @@ OpenCode, etc.) runs in WSL or on a macOS machine on the same network.
 
 ### Networking: WSL mirrored vs NAT
 
-**WSL mirrored networking (Windows 11 22H2+, recommended):** Enable in `.wslconfig`:
+**WSL mirrored networking (Windows 11 22H2+, recommended):** Enable it in `.wslconfig`,
+run `wsl --shutdown`, then restart WSL:
 
 ```ini
 [wsl2]
 networkingMode=mirrored
 ```
 
-With mirrored networking, `127.0.0.1` is shared between Windows and WSL. The server can stay
-on its default loopback bind and the WSL agent reaches it directly at `http://127.0.0.1:8765/mcp/`.
+Then keep the server on its default loopback bind and point the WSL agent at
+`http://127.0.0.1:8765/mcp/`.
 
-**WSL NAT mode or macOS:** The agent cannot reach Windows via `127.0.0.1`. Bind the server to
-the Windows LAN IP (RFC 1918 address) instead. For details on the NAT subnet and allowlist
-configuration, see [docs/remote-transport.md — WSL / Windows interop](remote-transport.md#wsl--windows-interop).
+**WSL NAT mode or macOS:** Bind the server to the Windows LAN IP instead. For the NAT subnet,
+host-address lookup, and allowlist details, see
+[docs/remote-transport.md — WSL / Windows interop](remote-transport.md#wsl--windows-interop).
 
 ### Steps
 
@@ -515,13 +516,8 @@ Remove these rules during cleanup, the same way you removed the port 8765 rule i
 winget install CaddyServer.Caddy
 ```
 
-Create `C:\caddy\Caddyfile`:
-
-```caddyfile
-mcp.yourdomain.com {
-    reverse_proxy 127.0.0.1:8765
-}
-```
+Create `C:\caddy\Caddyfile` using the sample from
+[docs/remote-transport.md — Sample Caddyfile](remote-transport.md#sample-caddyfile).
 
 Start Caddy:
 
@@ -643,23 +639,23 @@ For the full env-var reference, see [Environment variables](#environment-variabl
 
 ### Environment variables
 
-All `YUGEN_MT5_*` variables relevant to connection and security. Boolean variables accept
-`true` / `false` (case-insensitive); `true` is the only truthy value — `1`, `yes`, and `on`
-are **not** accepted.
+All `YUGEN_MT5_*` variables relevant to connection and security.
+
+- `REMOTE_*` and trading-gate booleans such as `YUGEN_MT5_ALLOW_LIVE_TRADING` and
+  `YUGEN_MT5_ALLOW_REAL_ACCOUNTS` are parsed as `true` / `false` (case-insensitive), with
+  only `true` treated as truthy.
+- `YUGEN_MT5_REAL_ACCOUNT_CONSENT` is different: it accepts `1`, `true`, `yes`, and `on`
+  (case-insensitive) as truthy values.
 
 **Connection and transport**
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `YUGEN_MT5_REMOTE_ENABLED` | No | `false` | Set `true` to start the HTTP remote transport. Requires the `[remote]` extra (`uvicorn`). |
-| `YUGEN_MT5_REMOTE_HOST` | No | `127.0.0.1` | Bind address for the HTTP listener. Use `0.0.0.0` for LAN/VPS (see trust-tier notes). |
-| `YUGEN_MT5_REMOTE_PORT` | No | `8765` | Port for the HTTP listener. |
-| `YUGEN_MT5_REMOTE_BEARER_TOKEN` | **Yes** (when remote enabled) | — | Secret token. Clients must send `Authorization: Bearer <token>` on every request. |
-| `YUGEN_MT5_REMOTE_TLS_TERMINATED` | No | `false` | Set `true` when an upstream proxy (Caddy, nginx) handles TLS. Satisfies the public-bind TLS requirement. |
-| `YUGEN_MT5_REMOTE_ALLOWLIST` | No | `127.0.0.1/32, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16` | Comma-separated CIDR allowlist for incoming connections. `*` allows any IP. Tighten to `/32` in production. |
-| `YUGEN_MT5_REMOTE_ALLOW_INSECURE` | No | `false` | Opt out of the TLS requirement for public binds. Use only for Phase A testing; the doctor reports this as CRITICAL. |
-| `YUGEN_MT5_REMOTE_STATELESS_HTTP` | No | `false` | Use stateless HTTP mode (no server-side session). Trades efficiency for simpler proxying. |
-| `YUGEN_MT5_REMOTE_PATH` | No | `/mcp/` | HTTP path the server serves. Change only if your reverse proxy rewrites the path. |
+For the canonical `REMOTE_*` variable reference (`YUGEN_MT5_REMOTE_ENABLED`,
+`YUGEN_MT5_REMOTE_HOST`, `YUGEN_MT5_REMOTE_PORT`, `YUGEN_MT5_REMOTE_BEARER_TOKEN`,
+`YUGEN_MT5_REMOTE_TLS_TERMINATED`, `YUGEN_MT5_REMOTE_ALLOWLIST`,
+`YUGEN_MT5_REMOTE_ALLOW_INSECURE`, `YUGEN_MT5_REMOTE_STATELESS_HTTP`, and
+`YUGEN_MT5_REMOTE_PATH`), see
+[docs/remote-transport.md — Environment variables](remote-transport.md#environment-variables).
+All URL examples in this guide assume the default remote path `/mcp/`.
 
 **Security and trading gates**
 
@@ -716,18 +712,13 @@ For JSON output (useful for scripting):
 yugen-mt5-mcp doctor --json
 ```
 
-**What the severity levels mean in a remote context:**
+Use `OK` for a clean posture, `WARN` when the server still starts with a reviewable risk,
+`CRITICAL` when the posture is unsafe (for example Phase A's intentional public HTTP test), and
+`SKIPPED` when a check does not apply.
 
-| Severity | Meaning |
-|----------|---------|
-| `OK` | Check passed. |
-| `WARN` | Risk present but server still starts. Review the message. |
-| `CRITICAL` | Risk is high. In remote context: public bind without TLS. Expected in Phase A (intentional); must be resolved before production. |
-| `SKIPPED` | Check does not apply (e.g. MT5 checks on non-Windows). |
-
-The doctor never emits the bearer token value in its output.
-
-For the full doctor check reference, see [docs/cli.md — doctor](cli.md#doctor).
+For the full command reference, exit-code behavior, and detailed remote posture examples, see
+[docs/cli.md — doctor](cli.md#doctor) and
+[docs/remote-transport.md — Doctor posture check](remote-transport.md#doctor-posture-check).
 
 ---
 

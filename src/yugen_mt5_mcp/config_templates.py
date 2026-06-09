@@ -7,6 +7,10 @@ that the user must supply are represented by generic placeholders.
 
 from __future__ import annotations
 
+import ipaddress
+
+from .security import is_trusted_local_bind
+
 _DEFAULT_ENV: dict[str, str] = {
     "YUGEN_MT5_ALLOWED_SYMBOLS": "EURUSD,XAUUSD",
     "YUGEN_MT5_ALLOW_LIVE_TRADING": "false",
@@ -107,6 +111,7 @@ def remote_config(
     host: str = "127.0.0.1",
     port: int = 8765,
     token: str = "<BEARER_TOKEN>",
+    scheme: str = "auto",
 ) -> dict[str, object]:
     """Return a remote-transport ``mcpServers`` block.
 
@@ -114,18 +119,33 @@ def remote_config(
     authentication.
 
     Args:
-        host:  The host where the yugen-mt5-mcp remote server is running.
-        port:  The port the remote server is listening on.
-        token: The bearer token used in the ``Authorization`` header.
-               Defaults to a placeholder; replace with a real token.
+        host:   The host where the yugen-mt5-mcp remote server is running.
+        port:   The port the remote server is listening on.
+        token:  The bearer token used in the ``Authorization`` header.
+                Defaults to a placeholder; replace with a real token.
+        scheme: URL scheme to use: ``"auto"`` (default), ``"http"``, or
+                ``"https"``.  When ``"auto"``, the scheme is inferred from
+                the host using :func:`~yugen_mt5_mcp.security.is_trusted_local_bind`:
+                loopback and RFC 1918/4193 addresses resolve to ``http``
+                (TLS optional on trusted-local tier); public IPs and domain
+                names resolve to ``https`` (TLS required).
 
     Returns:
         A JSON-serialisable dict.
     """
+    if scheme in ("http", "https"):
+        resolved_scheme = scheme
+    else:
+        try:
+            ip = ipaddress.ip_address(host)
+            resolved_scheme = "http" if is_trusted_local_bind(ip) else "https"
+        except ValueError:
+            resolved_scheme = "https"
+
     return {
         "mcpServers": {
             "yugen-mt5-remote": {
-                "url": f"https://{host}:{port}/mcp",
+                "url": f"{resolved_scheme}://{host}:{port}/mcp/",
                 "headers": {
                     "Authorization": f"Bearer {token}",
                 },

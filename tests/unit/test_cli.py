@@ -134,9 +134,7 @@ def test_run_env_file_missing_exits_1(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
-def test_run_real_env_overrides_env_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_real_env_overrides_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Real environment variables win over --env-file values (precedence)."""
     env_file = tmp_path / "demo.env"
     env_file.write_text("YUGEN_MT5_DEFAULT_ACTOR=from_file\n")
@@ -311,6 +309,41 @@ def test_config_output_writes_to_file(tmp_path: Path) -> None:
     assert out_file.exists()
     parsed = json.loads(out_file.read_text())
     assert "mcpServers" in parsed
+
+
+# ---------------------------------------------------------------------------
+# config remote --scheme flag (T4 RED → T5 GREEN)
+# ---------------------------------------------------------------------------
+
+
+def test_config_remote_scheme_flag_http() -> None:
+    result = runner.invoke(app, ["config", "remote", "--host", "203.0.113.5", "--scheme", "http"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    url = parsed["mcpServers"]["yugen-mt5-remote"]["url"]
+    assert url.startswith("http://")
+    assert url.endswith("/mcp/")
+
+
+def test_config_remote_scheme_flag_https_on_loopback() -> None:
+    result = runner.invoke(app, ["config", "remote", "--host", "127.0.0.1", "--scheme", "https"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    url = parsed["mcpServers"]["yugen-mt5-remote"]["url"]
+    assert url.startswith("https://")
+
+
+def test_config_remote_default_infers_http_for_loopback() -> None:
+    result = runner.invoke(app, ["config", "remote"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    url = parsed["mcpServers"]["yugen-mt5-remote"]["url"]
+    assert url.startswith("http://127.0.0.1:8765/mcp/")
+
+
+def test_config_remote_invalid_scheme_rejected() -> None:
+    result = runner.invoke(app, ["config", "remote", "--scheme", "ftp"])
+    assert result.exit_code != 0
 
 
 # ---------------------------------------------------------------------------

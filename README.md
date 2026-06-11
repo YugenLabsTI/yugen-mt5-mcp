@@ -2,6 +2,10 @@
 
 # yugen-mt5-mcp
 
+> 🌐 **Language**: English | [Español](README.es.md)
+>
+> 📚 New to the project? Start with the [documentation index](docs/index.md) — it explains the recommended reading order. **TIP**: toda la documentación también está disponible en español en [`docs/es/`](docs/es/).
+
 Secure, auditable MCP server for MetaTrader 5 — gives AI clients controlled access to market data, account state, and trade execution through a hardened gate with symbol allowlists, volume limits, and an append-only audit trail.
 
 ## Quick Start (for users)

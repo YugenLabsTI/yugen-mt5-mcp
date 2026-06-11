@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/YugenLabsTI/yugen-mt5-mcp/compare/v1.0.2...v1.0.3) (2026-06-11)
+
+
+### Documentation
+
+* add Spanish documentation ([b65a520](https://github.com/YugenLabsTI/yugen-mt5-mcp/commit/b65a520c63de4e243930c965a6f6a0be1af88f89))
+
 ## [1.0.2](https://github.com/YugenLabsTI/yugen-mt5-mcp/compare/v1.0.1...v1.0.2) (2026-06-09)
 
 
